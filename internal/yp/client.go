@@ -10,16 +10,15 @@ import (
 	"github.com/titagaki/peercast-pcp/pcp"
 
 	"github.com/titagaki/peercast-mm/internal/channel"
+	"github.com/titagaki/peercast-mm/internal/version"
 )
 
 const (
-	pcpVersion      = 1218
 	bcstTTL         = 7
 	defaultPCPPort  = 7144
 	retryInitial    = 5 * time.Second
 	retryMax        = 120 * time.Second
 	defaultInterval = 120 * time.Second
-	agentName       = "peercast-go/0.1.0"
 )
 
 // Client maintains a PCP COUT connection to a YP (root server).
@@ -147,8 +146,8 @@ func (c *Client) handleOleh(a *pcp.Atom) {
 
 func (c *Client) buildHelo() *pcp.Atom {
 	return pcp.NewParentAtom(pcp.PCPHelo,
-		pcp.NewStringAtom(pcp.PCPHeloAgent, agentName),
-		pcp.NewIntAtom(pcp.PCPHeloVersion, pcpVersion),
+		pcp.NewStringAtom(pcp.PCPHeloAgent, version.AgentName),
+		pcp.NewIntAtom(pcp.PCPHeloVersion, version.PCPVersion),
 		pcp.NewIDAtom(pcp.PCPHeloSessionID, c.sessionID),
 		pcp.NewShortAtom(pcp.PCPHeloPort, c.listenPort),
 		pcp.NewIDAtom(pcp.PCPHeloBCID, c.broadcastID),
@@ -196,6 +195,10 @@ func (c *Client) buildBcst() *pcp.Atom {
 		pcp.NewIntAtom(pcp.PCPHostNewPos, buf.NewestPos()),
 		pcp.NewIDAtom(pcp.PCPHostChanID, c.ch.ID),
 		pcp.NewByteAtom(pcp.PCPHostFlags1, flags),
+		pcp.NewIntAtom(pcp.PCPHostVersion, version.PCPVersion),
+		pcp.NewIntAtom(pcp.PCPHostVersionVP, version.PCPVersionVP),
+		pcp.NewBytesAtom(pcp.PCPHostVersionExPrefix, []byte(version.ExPrefix)),
+		pcp.NewShortAtom(pcp.PCPHostVersionExNumber, version.ExNumber()),
 	)
 
 	return pcp.NewParentAtom(pcp.PCPBcst,
@@ -204,7 +207,7 @@ func (c *Client) buildBcst() *pcp.Atom {
 		pcp.NewIDAtom(pcp.PCPBcstFrom, c.sessionID),
 		pcp.NewByteAtom(pcp.PCPBcstGroup, byte(pcp.PCPBcstGroupRoot|pcp.PCPBcstGroupTrackers)),
 		pcp.NewIDAtom(pcp.PCPBcstChanID, c.ch.ID),
-		pcp.NewIntAtom(pcp.PCPBcstVersion, pcpVersion),
+		pcp.NewIntAtom(pcp.PCPBcstVersion, version.PCPVersion),
 		chanAtom,
 		hostAtom,
 	)

@@ -1,4 +1,4 @@
-package output
+package servent
 
 import (
 	"bufio"
@@ -14,11 +14,10 @@ import (
 	"github.com/titagaki/peercast-pcp/pcp"
 
 	"github.com/titagaki/peercast-mm/internal/channel"
+	"github.com/titagaki/peercast-mm/internal/version"
 )
 
 const (
-	pcpVersion         = 1218
-	agentName          = "peercast-go/0.1.0"
 	outputQueueTimeout = 5 * time.Second
 	pollInterval       = 50 * time.Millisecond
 )
@@ -75,12 +74,12 @@ func (o *PCPOutputStream) run() {
 	defer o.conn.Close()
 
 	if err := o.handshake(); err != nil {
-		log.Printf("pcp output: handshake error: %v", err)
+		log.Printf("pcp servent: handshake error: %v", err)
 		return
 	}
 
 	if err := o.sendInitial(); err != nil {
-		log.Printf("pcp output: send initial error: %v", err)
+		log.Printf("pcp servent: send initial error: %v", err)
 		return
 	}
 
@@ -144,9 +143,9 @@ func (o *PCPOutputStream) handshake() error {
 	// Send oleh.
 	remoteIP := ipToUint32(o.conn.RemoteAddr())
 	oleh := pcp.NewParentAtom(pcp.PCPOleh,
-		pcp.NewStringAtom(pcp.PCPHeloAgent, agentName),
+		pcp.NewStringAtom(pcp.PCPHeloAgent, version.AgentName),
 		pcp.NewIDAtom(pcp.PCPHeloSessionID, o.sessionID),
-		pcp.NewIntAtom(pcp.PCPHeloVersion, pcpVersion),
+		pcp.NewIntAtom(pcp.PCPHeloVersion, version.PCPVersion),
 		pcp.NewIntAtom(pcp.PCPHeloRemoteIP, remoteIP),
 	)
 	if err := oleh.Write(o.conn); err != nil {
@@ -191,7 +190,7 @@ func (o *PCPOutputStream) streamLoop() {
 
 		// Check for queue stall.
 		if time.Since(lastSend) > outputQueueTimeout {
-			log.Printf("pcp output: queue timeout, closing")
+			log.Printf("pcp servent: queue timeout, closing")
 			return
 		}
 
@@ -287,7 +286,7 @@ func (o *PCPOutputStream) forwardBcst(a *pcp.Atom) {
 			return
 		}
 	}
-	// We don't re-broadcast here; the OutputListener would fan-out.
+	// We don't re-broadcast here; the Listener would fan-out.
 	// For now, silently consume.
 }
 

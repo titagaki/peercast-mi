@@ -1,4 +1,4 @@
-package output
+package servent
 
 import (
 	"bufio"
@@ -70,7 +70,7 @@ func (o *HTTPOutputStream) run() {
 
 	req, err := http.ReadRequest(o.br)
 	if err != nil {
-		log.Printf("http output: read request: %v", err)
+		log.Printf("http servent: read request: %v", err)
 		return
 	}
 	_ = req.Body.Close()

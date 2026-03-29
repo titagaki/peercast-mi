@@ -10,8 +10,8 @@ import (
 	"github.com/titagaki/peercast-mm/internal/channel"
 	"github.com/titagaki/peercast-mm/internal/config"
 	"github.com/titagaki/peercast-mm/internal/id"
-	"github.com/titagaki/peercast-mm/internal/output"
 	"github.com/titagaki/peercast-mm/internal/rtmp"
+	"github.com/titagaki/peercast-mm/internal/servent"
 	"github.com/titagaki/peercast-mm/internal/yp"
 )
 
@@ -53,7 +53,7 @@ func main() {
 	})
 
 	// Start OutputListener.
-	listener := output.NewListener(sessionID, ch, cfg.PeercastPort)
+	listener := servent.NewListener(sessionID, ch, cfg.PeercastPort)
 	go func() {
 		log.Printf("output: listening on :%d", cfg.PeercastPort)
 		if err := listener.ListenAndServe(); err != nil {

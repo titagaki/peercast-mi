@@ -1,4 +1,4 @@
-package output
+package servent
 
 import (
 	"bufio"
@@ -11,7 +11,7 @@ import (
 	"github.com/titagaki/peercast-mm/internal/channel"
 )
 
-// Listener accepts incoming connections on the PCP port and dispatches them
+// Listener accepts incoming connections on the PeerCast port and dispatches them
 // to the appropriate output stream handler.
 type Listener struct {
 	sessionID pcp.GnuID
@@ -20,7 +20,7 @@ type Listener struct {
 	listener  net.Listener
 }
 
-// NewListener creates a new OutputListener.
+// NewListener creates a new Listener.
 func NewListener(sessionID pcp.GnuID, ch *channel.Channel, port int) *Listener {
 	return &Listener{
 		sessionID: sessionID,
@@ -33,7 +33,7 @@ func NewListener(sessionID pcp.GnuID, ch *channel.Channel, port int) *Listener {
 func (l *Listener) ListenAndServe() error {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", l.port))
 	if err != nil {
-		return fmt.Errorf("output: listen: %w", err)
+		return fmt.Errorf("servent: listen: %w", err)
 	}
 	l.listener = ln
 	defer ln.Close()
@@ -66,14 +66,14 @@ func (l *Listener) handle(conn net.Conn) {
 
 	switch {
 	case startsWith(peek, "GET /channel/"):
-		log.Printf("output: PCP relay connection from %s", conn.RemoteAddr())
+		log.Printf("servent: PCP relay connection from %s", conn.RemoteAddr())
 		h := newPCPOutputStream(conn, br, l.sessionID, l.ch)
 		l.ch.AddOutput(h)
 		h.run()
 		l.ch.RemoveOutput(h)
 
 	case startsWith(peek, "GET /stream/"):
-		log.Printf("output: HTTP direct connection from %s", conn.RemoteAddr())
+		log.Printf("servent: HTTP direct connection from %s", conn.RemoteAddr())
 		h := newHTTPOutputStream(conn, br, l.ch)
 		l.ch.AddOutput(h)
 		h.run()
@@ -84,7 +84,7 @@ func (l *Listener) handle(conn net.Conn) {
 		conn.Close()
 
 	default:
-		log.Printf("output: unknown protocol from %s, closing", conn.RemoteAddr())
+		log.Printf("servent: unknown protocol from %s, closing", conn.RemoteAddr())
 		conn.Close()
 	}
 }
