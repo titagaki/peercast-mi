@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +51,9 @@ func newPCPOutputStream(conn net.Conn, br *bufio.Reader, sessionID pcp.GnuID, ch
 	}
 }
 
+// Type implements channel.OutputStream.
+func (o *PCPOutputStream) Type() channel.OutputStreamType { return channel.OutputStreamPCP }
+
 // NotifyHeader implements channel.OutputStream.
 func (o *PCPOutputStream) NotifyHeader() { notify(o.headerCh) }
 
@@ -73,7 +77,8 @@ func (o *PCPOutputStream) Close() {
 func (o *PCPOutputStream) run() {
 	defer o.conn.Close()
 
-	if err := o.handshake(); err != nil {
+	startPos, err := o.handshake()
+	if err != nil {
 		log.Printf("pcp servent: handshake error: %v", err)
 		return
 	}
@@ -83,22 +88,30 @@ func (o *PCPOutputStream) run() {
 		return
 	}
 
-	o.streamLoop()
+	o.streamLoop(startPos)
 }
 
 // handshake processes the HTTP GET, "pcp\n", and helo/oleh exchange.
-func (o *PCPOutputStream) handshake() error {
+// It returns the requested start position from the x-peercast-pos header (0 if absent).
+func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 	// Read HTTP request.
 	req, err := http.ReadRequest(o.br)
 	if err != nil {
-		return fmt.Errorf("read HTTP request: %w", err)
+		return 0, fmt.Errorf("read HTTP request: %w", err)
 	}
 	_ = req.Body.Close()
+
+	// x-peercast-pos ヘッダーを読み取る
+	if v := req.Header.Get("x-peercast-pos"); v != "" {
+		if n, parseErr := strconv.ParseUint(v, 10, 32); parseErr == nil {
+			startPos = uint32(n)
+		}
+	}
 
 	// Read "pcp\n" magic atom: 4-byte tag + 4-byte length field + 4-byte version payload.
 	pcpMagic := make([]byte, 12)
 	if _, err := io.ReadFull(o.br, pcpMagic); err != nil {
-		return fmt.Errorf("read pcp magic: %w", err)
+		return 0, fmt.Errorf("read pcp magic: %w", err)
 	}
 
 	// Read helo.
@@ -107,10 +120,10 @@ func (o *PCPOutputStream) handshake() error {
 
 	heloAtom, err := pcp.ReadAtom(o.br)
 	if err != nil {
-		return fmt.Errorf("read helo: %w", err)
+		return 0, fmt.Errorf("read helo: %w", err)
 	}
 	if heloAtom.Tag != pcp.PCPHelo {
-		return fmt.Errorf("expected helo, got %s", heloAtom.Tag)
+		return 0, fmt.Errorf("expected helo, got %s", heloAtom.Tag)
 	}
 
 	// Validate helo.
@@ -119,26 +132,26 @@ func (o *PCPOutputStream) handshake() error {
 		if err == nil {
 			if id == o.sessionID {
 				o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorLoopback)
-				return fmt.Errorf("loopback connection")
+				return 0, fmt.Errorf("loopback connection")
 			}
 			var zero pcp.GnuID
 			if id == zero {
 				o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorNotIdentified)
-				return fmt.Errorf("not identified")
+				return 0, fmt.Errorf("not identified")
 			}
 		}
 	}
 	if ver := heloAtom.FindChild(pcp.PCPHeloVersion); ver != nil {
 		if v, err := ver.GetInt(); err == nil && v < 1200 {
 			o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorBadAgent)
-			return fmt.Errorf("bad agent version %d", v)
+			return 0, fmt.Errorf("bad agent version %d", v)
 		}
 	}
 
 	// Send HTTP 200 OK first; oleh goes in the response body.
 	resp := "HTTP/1.0 200 OK\r\nContent-Type: application/x-peercast-pcp\r\n\r\n"
 	if _, err := io.WriteString(o.conn, resp); err != nil {
-		return fmt.Errorf("write HTTP response: %w", err)
+		return 0, fmt.Errorf("write HTTP response: %w", err)
 	}
 
 	// Send oleh.
@@ -150,10 +163,10 @@ func (o *PCPOutputStream) handshake() error {
 		pcp.NewIntAtom(pcp.PCPHeloRemoteIP, remoteIP),
 	)
 	if err := oleh.Write(o.conn); err != nil {
-		return fmt.Errorf("write oleh: %w", err)
+		return 0, fmt.Errorf("write oleh: %w", err)
 	}
 
-	return nil
+	return startPos, nil
 }
 
 // sendInitial sends chan > info, trck, and the head pkt.
@@ -167,10 +180,17 @@ func (o *PCPOutputStream) sendInitial() error {
 }
 
 // streamLoop continuously sends buffered content packets to the peer.
-func (o *PCPOutputStream) streamLoop() {
-	var pos uint32
-	if header, hpos := o.ch.Buffer.Header(); header != nil {
-		pos = hpos
+// reqPos は x-peercast-pos で指定された開始位置 (0 = ヘッダー位置から開始)。
+func (o *PCPOutputStream) streamLoop(reqPos uint32) {
+	_, hpos := o.ch.Buffer.Header()
+	pos := hpos
+	if reqPos > 0 {
+		oldest := o.ch.Buffer.OldestPos()
+		if reqPos >= oldest {
+			pos = reqPos
+		} else {
+			pos = oldest
+		}
 	}
 
 	lastSend := time.Now()

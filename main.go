@@ -22,6 +22,7 @@ func main() {
 	chanGenre := flag.String("genre", "", "Channel genre")
 	chanURL := flag.String("url", "", "Channel contact URL")
 	chanDesc := flag.String("desc", "", "Channel description")
+	chanBitrate := flag.Uint("bitrate", 0, "Channel bitrate (kbps)")
 	flag.Parse()
 
 	if *chanName == "" {
@@ -35,7 +36,7 @@ func main() {
 
 	sessionID := id.NewRandom()
 	broadcastID := id.NewRandom()
-	channelID := id.ChannelID(broadcastID, *chanName, *chanGenre, "")
+	channelID := id.ChannelID(broadcastID, *chanName, *chanGenre, uint32(*chanBitrate))
 
 	log.Printf("SessionID:   %s", sessionID)
 	log.Printf("BroadcastID: %s", broadcastID)
@@ -47,6 +48,7 @@ func main() {
 		Genre:    *chanGenre,
 		URL:      *chanURL,
 		Desc:     *chanDesc,
+		Bitrate:  uint32(*chanBitrate),
 		Type:     "FLV",
 		MIMEType: "video/x-flv",
 		Ext:      ".flv",

@@ -45,6 +45,9 @@ func newHTTPOutputStream(conn net.Conn, br *bufio.Reader, ch *channel.Channel) *
 	}
 }
 
+// Type implements channel.OutputStream.
+func (o *HTTPOutputStream) Type() channel.OutputStreamType { return channel.OutputStreamHTTP }
+
 // NotifyHeader implements channel.OutputStream.
 func (o *HTTPOutputStream) NotifyHeader() { notify(o.headerCh) }
 

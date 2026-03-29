@@ -151,6 +151,7 @@ func (c *Client) buildHelo() *pcp.Atom {
 		pcp.NewIntAtom(pcp.PCPHeloVersion, version.PCPVersion),
 		pcp.NewIDAtom(pcp.PCPHeloSessionID, c.sessionID),
 		pcp.NewShortAtom(pcp.PCPHeloPort, c.listenPort),
+		pcp.NewShortAtom(pcp.PCPHeloPing, c.listenPort),
 		pcp.NewIDAtom(pcp.PCPHeloBCID, c.broadcastID),
 	)
 }
@@ -189,8 +190,8 @@ func (c *Client) buildBcst() *pcp.Atom {
 		pcp.NewIDAtom(pcp.PCPHostID, c.sessionID),
 		pcp.NewIntAtom(pcp.PCPHostIP, c.globalIP),
 		pcp.NewShortAtom(pcp.PCPHostPort, c.listenPort),
-		pcp.NewIntAtom(pcp.PCPHostNumListeners, 0),
-		pcp.NewIntAtom(pcp.PCPHostNumRelays, 0),
+		pcp.NewIntAtom(pcp.PCPHostNumListeners, uint32(c.ch.NumListeners())),
+		pcp.NewIntAtom(pcp.PCPHostNumRelays, uint32(c.ch.NumRelays())),
 		pcp.NewIntAtom(pcp.PCPHostUptime, c.ch.UptimeSeconds()),
 		pcp.NewIntAtom(pcp.PCPHostOldPos, buf.OldestPos()),
 		pcp.NewIntAtom(pcp.PCPHostNewPos, buf.NewestPos()),

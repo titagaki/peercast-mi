@@ -7,6 +7,14 @@ import (
 	"github.com/titagaki/peercast-pcp/pcp"
 )
 
+// OutputStreamType distinguishes PCP relay streams from HTTP direct streams.
+type OutputStreamType int
+
+const (
+	OutputStreamPCP  OutputStreamType = iota // PCPOutputStream (downstream relay node)
+	OutputStreamHTTP                         // HTTPOutputStream (media player)
+)
+
 // OutputStream is implemented by PCPOutputStream and HTTPOutputStream.
 type OutputStream interface {
 	// NotifyHeader is called when the stream header changes.
@@ -17,6 +25,8 @@ type OutputStream interface {
 	NotifyTrack()
 	// Close terminates the output stream.
 	Close()
+	// Type returns whether this is a PCP relay or HTTP direct stream.
+	Type() OutputStreamType
 }
 
 // Channel is the central data structure for an active broadcast.
@@ -26,10 +36,12 @@ type Channel struct {
 	Buffer      *ContentBuffer
 	StartTime   time.Time
 
-	mu      sync.RWMutex
-	info    ChannelInfo
-	track   TrackInfo
-	outputs []OutputStream
+	mu           sync.RWMutex
+	info         ChannelInfo
+	track        TrackInfo
+	outputs      []OutputStream
+	numListeners int // HTTPOutputStream の数
+	numRelays    int // PCPOutputStream の数
 }
 
 // New creates a new Channel.
@@ -94,31 +106,49 @@ func (c *Channel) Write(data []byte, pos uint32, cont bool) {
 	c.Buffer.Write(data, pos, cont)
 }
 
-// AddOutput registers an output stream.
+// AddOutput registers an output stream and updates the appropriate counter.
 func (c *Channel) AddOutput(o OutputStream) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.outputs = append(c.outputs, o)
+	switch o.Type() {
+	case OutputStreamPCP:
+		c.numRelays++
+	case OutputStreamHTTP:
+		c.numListeners++
+	}
 }
 
-// RemoveOutput unregisters an output stream.
+// RemoveOutput unregisters an output stream and updates the appropriate counter.
 func (c *Channel) RemoveOutput(o OutputStream) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for i, out := range c.outputs {
 		if out == o {
 			c.outputs = append(c.outputs[:i], c.outputs[i+1:]...)
+			switch o.Type() {
+			case OutputStreamPCP:
+				c.numRelays--
+			case OutputStreamHTTP:
+				c.numListeners--
+			}
 			return
 		}
 	}
 }
 
-// NumListeners returns the number of HTTPOutputStream connections.
-// (Callers track this themselves; this returns the count of registered outputs.)
-func (c *Channel) NumOutputs() int {
+// NumListeners returns the number of active HTTPOutputStream connections.
+func (c *Channel) NumListeners() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.outputs)
+	return c.numListeners
+}
+
+// NumRelays returns the number of active PCPOutputStream connections.
+func (c *Channel) NumRelays() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.numRelays
 }
 
 // CloseAll closes all registered output streams.

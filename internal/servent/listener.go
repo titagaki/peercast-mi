@@ -3,12 +3,14 @@ package servent
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
 	"github.com/titagaki/peercast-mm/internal/channel"
+	"github.com/titagaki/peercast-mm/internal/version"
 )
 
 // Listener accepts incoming connections on the PeerCast port and dispatches them
@@ -80,8 +82,8 @@ func (l *Listener) handle(conn net.Conn) {
 		l.ch.RemoveOutput(h)
 
 	case startsWith(peek, "pcp\n"):
-		// Future: ping handler
-		conn.Close()
+		log.Printf("servent: ping connection from %s", conn.RemoteAddr())
+		go handlePing(conn, br, l.sessionID)
 
 	default:
 		log.Printf("servent: unknown protocol from %s, closing", conn.RemoteAddr())
@@ -99,4 +101,32 @@ func startsWith(data []byte, prefix string) bool {
 		}
 	}
 	return true
+}
+
+// handlePing handles a firewall reachability check connection from the YP.
+// The YP sends "pcp\n" + helo; we reply with oleh (sid) + quit.
+func handlePing(conn net.Conn, br *bufio.Reader, sessionID pcp.GnuID) {
+	defer conn.Close()
+
+	// Read "pcp\n" magic: 4-byte tag + 4-byte length + 4-byte version payload.
+	magic := make([]byte, 12)
+	if _, err := io.ReadFull(br, magic); err != nil {
+		return
+	}
+
+	heloAtom, err := pcp.ReadAtom(br)
+	if err != nil || heloAtom.Tag != pcp.PCPHelo {
+		return
+	}
+
+	oleh := pcp.NewParentAtom(pcp.PCPOleh,
+		pcp.NewStringAtom(pcp.PCPHeloAgent, version.AgentName),
+		pcp.NewIDAtom(pcp.PCPHeloSessionID, sessionID),
+		pcp.NewIntAtom(pcp.PCPHeloVersion, version.PCPVersion),
+	)
+	if err := oleh.Write(conn); err != nil {
+		return
+	}
+
+	pcp.NewIntAtom(pcp.PCPQuit, pcp.PCPErrorQuit+pcp.PCPErrorShutdown).Write(conn)
 }
