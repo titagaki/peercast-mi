@@ -11,27 +11,27 @@ import (
 	"github.com/titagaki/peercast-mm/internal/channel"
 )
 
-const defaultPCPPort = 7144
-
 // Listener accepts incoming connections on the PCP port and dispatches them
 // to the appropriate output stream handler.
 type Listener struct {
 	sessionID pcp.GnuID
 	ch        *channel.Channel
+	port      int
 	listener  net.Listener
 }
 
 // NewListener creates a new OutputListener.
-func NewListener(sessionID pcp.GnuID, ch *channel.Channel) *Listener {
+func NewListener(sessionID pcp.GnuID, ch *channel.Channel, port int) *Listener {
 	return &Listener{
 		sessionID: sessionID,
 		ch:        ch,
+		port:      port,
 	}
 }
 
-// ListenAndServe starts listening on port 7144.
+// ListenAndServe starts listening on the configured PeerCast port.
 func (l *Listener) ListenAndServe() error {
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", defaultPCPPort))
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", l.port))
 	if err != nil {
 		return fmt.Errorf("output: listen: %w", err)
 	}

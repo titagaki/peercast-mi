@@ -1,0 +1,16 @@
+rtmp_port     = 1935
+peercast_port = 7154
+
+# 複数の YP を定義しておき、起動時に -yp <name> で選択する。
+# デフォルト（-yp 省略時）は最初のエントリが使われる。
+[[yp]]
+name = "0yp"
+addr = "pcp://yayaue.me/"
+
+[[yp]]
+name = "SP"
+addr = "pcp://bayonet.ddo.jp:7146/"
+
+[[yp]]
+name = "p@YP"
+addr = "pcp://root.p-at.net/"

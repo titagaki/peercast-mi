@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/titagaki/peercast-mm/internal/channel"
+	"github.com/titagaki/peercast-mm/internal/config"
 	"github.com/titagaki/peercast-mm/internal/id"
 	"github.com/titagaki/peercast-mm/internal/output"
 	"github.com/titagaki/peercast-mm/internal/rtmp"
@@ -15,12 +16,22 @@ import (
 )
 
 func main() {
-	ypAddr := flag.String("yp", "", "YP address (host:port), e.g. yp.example.com:7144")
-	chanName := flag.String("name", "test", "Channel name")
+	configPath := flag.String("config", "config.toml", "Path to config file")
+	ypName := flag.String("yp", "", "YP name to use (default: first entry in config)")
+	chanName := flag.String("name", "", "Channel name (required)")
 	chanGenre := flag.String("genre", "", "Channel genre")
 	chanURL := flag.String("url", "", "Channel contact URL")
 	chanDesc := flag.String("desc", "", "Channel description")
 	flag.Parse()
+
+	if *chanName == "" {
+		log.Fatal("-name is required")
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatalf("failed to load config: %v", err)
+	}
 
 	sessionID := id.NewRandom()
 	broadcastID := id.NewRandom()
@@ -42,28 +53,35 @@ func main() {
 	})
 
 	// Start OutputListener.
-	listener := output.NewListener(sessionID, ch)
+	listener := output.NewListener(sessionID, ch, cfg.PeercastPort)
 	go func() {
-		log.Printf("output: listening on :7144")
+		log.Printf("output: listening on :%d", cfg.PeercastPort)
 		if err := listener.ListenAndServe(); err != nil {
 			log.Printf("output: listener stopped: %v", err)
 		}
 	}()
 
 	// Start YPClient if configured.
-	if *ypAddr != "" {
-		ypClient := yp.New(*ypAddr, sessionID, broadcastID, ch)
+	ypEntry, err := cfg.FindYP(*ypName)
+	if err != nil {
+		log.Printf("yp: %v (skipping)", err)
+	} else {
+		hostPort, err := ypEntry.HostPort()
+		if err != nil {
+			log.Fatalf("yp: invalid addr %q: %v", ypEntry.Addr, err)
+		}
+		ypClient := yp.New(hostPort, sessionID, broadcastID, ch)
 		go func() {
-			log.Printf("yp: connecting to %s", *ypAddr)
+			log.Printf("yp: connecting to %s (%s)", ypEntry.Addr, ypEntry.Name)
 			ypClient.Run()
 		}()
 		defer ypClient.Stop()
 	}
 
 	// Start RTMP server.
-	rtmpServer := rtmp.NewServer(ch)
+	rtmpServer := rtmp.NewServer(ch, cfg.RTMPPort)
 	go func() {
-		log.Printf("rtmp: listening on :1935")
+		log.Printf("rtmp: listening on :%d", cfg.RTMPPort)
 		if err := rtmpServer.ListenAndServe(); err != nil {
 			log.Printf("rtmp: server stopped: %v", err)
 		}

@@ -1,0 +1,79 @@
+package config
+
+import (
+	"fmt"
+	"net/url"
+	"os"
+
+	"github.com/BurntSushi/toml"
+)
+
+type YP struct {
+	Name string `toml:"name"`
+	Addr string `toml:"addr"`
+}
+
+// HostPort returns the "host:port" string for use with pcp.Dial.
+// Accepts either a plain "host:port" or a "pcp://host[:port]/" URL.
+// The default port is 7144.
+func (y *YP) HostPort() (string, error) {
+	u, err := url.Parse(y.Addr)
+	if err != nil || u.Scheme == "" {
+		// Treat as plain host:port.
+		return y.Addr, nil
+	}
+	if u.Scheme != "pcp" {
+		return "", fmt.Errorf("unsupported scheme %q in yp addr %q", u.Scheme, y.Addr)
+	}
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		port = "7144"
+	}
+	return host + ":" + port, nil
+}
+
+type Config struct {
+	RTMPPort     int  `toml:"rtmp_port"`
+	PeercastPort int  `toml:"peercast_port"`
+	YPs          []YP `toml:"yp"`
+}
+
+func defaults() Config {
+	return Config{
+		RTMPPort:     1935,
+		PeercastPort: 7144,
+	}
+}
+
+// Load reads the TOML config file at path. Missing fields fall back to defaults.
+func Load(path string) (*Config, error) {
+	cfg := defaults()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("config: read %s: %w", path, err)
+	}
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	return &cfg, nil
+}
+
+// FindYP returns the YP entry matching name.
+// If name is empty, the first entry is returned.
+// Returns an error if the list is empty or name is not found.
+func (c *Config) FindYP(name string) (*YP, error) {
+	if len(c.YPs) == 0 {
+		return nil, fmt.Errorf("config: no yp entries defined")
+	}
+	if name == "" {
+		return &c.YPs[0], nil
+	}
+	for i := range c.YPs {
+		if c.YPs[i].Name == name {
+			return &c.YPs[i], nil
+		}
+	}
+	return nil, fmt.Errorf("config: yp %q not found", name)
+}

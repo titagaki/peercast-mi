@@ -14,16 +14,15 @@ import (
 	"github.com/titagaki/peercast-mm/internal/channel"
 )
 
-const defaultPort = 1935
-
 // Server listens for RTMP push connections from an encoder.
 type Server struct {
-	srv *gortmp.Server
+	srv  *gortmp.Server
+	port int
 }
 
 // NewServer creates an RTMPServer that feeds data into the given channel.
-func NewServer(ch *channel.Channel) *Server {
-	s := &Server{}
+func NewServer(ch *channel.Channel, port int) *Server {
+	s := &Server{port: port}
 	s.srv = gortmp.NewServer(&gortmp.ServerConfig{
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *gortmp.ConnConfig) {
 			h := newHandler(ch)
@@ -33,9 +32,9 @@ func NewServer(ch *channel.Channel) *Server {
 	return s
 }
 
-// ListenAndServe starts listening on the RTMP port.
+// ListenAndServe starts listening on the configured RTMP port.
 func (s *Server) ListenAndServe() error {
-	l, err := net.Listen("tcp", fmt.Sprintf(":%d", defaultPort))
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
 	if err != nil {
 		return fmt.Errorf("rtmp: listen: %w", err)
 	}
