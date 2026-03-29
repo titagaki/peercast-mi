@@ -1,0 +1,391 @@
+# peercast-mm コンポーネント仕様
+
+[spec.md](spec.md) のシステム概要・ライフサイクル・並行処理設計を前提とする。
+
+---
+
+## 4.1 RTMPServer
+
+### 使用ライブラリ
+
+`github.com/yutopp/go-rtmp` を使用する。`gortmp.NewServer` でサーバーを立て、`gortmp.Handler` インターフェースを実装して FLV タグを受け取る。
+
+### 責務
+
+- ポート 1935 で TCP 待ち受け
+- RTMP ハンドシェイク処理 (go-rtmp に委譲)
+- FLV タグ (Video / Audio / ScriptData) のストリームへの変換
+- チャンネルメタデータ (`onMetaData`) からの `ChannelInfo` 更新
+
+### FLV タグ形式
+
+RTMP メッセージを FLV タグ形式に変換して扱う。
+
+| フィールド | サイズ | 内容 |
+|:---|:---|:---|
+| TagType | 1 byte | 8=Audio / 9=Video / 18=ScriptData |
+| DataSize | 3 bytes | ボディのバイト数 (big-endian) |
+| Timestamp | 3 bytes | ミリ秒タイムスタンプ (big-endian 下位 24 bit) |
+| TimestampExt | 1 byte | タイムスタンプ上位 8 bit |
+| StreamID | 3 bytes | 常に `0x000000` |
+| Data | N bytes | RTMP メッセージボディ |
+| BackPointer | 4 bytes | タグ全体サイズ `11 + N` (big-endian) |
+
+### シーケンスヘッダーの検出
+
+RTMP メッセージボディの先頭バイトで判定する。
+
+| タグタイプ | 条件 | 意味 |
+|:---|:---|:---|
+| Video (9) | `body[0] == 0x17 && body[1] == 0x00` | AVC sequence header (AVCDecoderConfigurationRecord) |
+| Audio (8) | `body[0] == 0xAF && body[1] == 0x00` | AAC sequence header (AudioSpecificConfig) |
+| ScriptData (18) | AMF0 文字列 = `"onMetaData"` | メタデータ |
+
+- `0x17`: FrameType=1 (keyframe) + CodecID=7 (AVC/H.264)
+- `0xAF`: SoundFormat=10 (AAC) + SoundRate=3 + SoundSize=1 + SoundType=1
+
+### head パケットの組み立て
+
+AVC または AAC シーケンスヘッダーが揃った時点で組み立て、`Channel.SetHeader()` を呼ぶ。
+
+```
+[FLV ファイルヘッダー 13 bytes]
+  "FLV" + version(0x01) + flags(0x05: hasVideo|hasAudio) + dataOffset(9) + PreviousTagSize0(0)
+
+[onMetaData タグ]            ← 存在する場合のみ。タイムスタンプは 0 に書き換え
+[AVC sequence header タグ]   ← 存在する場合のみ。タイムスタンプは 0 に書き換え
+[AAC sequence header タグ]   ← 存在する場合のみ。タイムスタンプは 0 に書き換え
+```
+
+各タグには 4 バイトの BackPointer (タグサイズ) を後置する。
+
+シーケンスヘッダーが再送されたとき (エンコーダー再接続等) は head パケットを更新し、接続中の全出力ストリームに `NotifyHeader()` で通知する。
+
+### RTMP → Channel マッピング
+
+| RTMP メッセージ | 処理 |
+|:---|:---|
+| ScriptData `onMetaData` | AMF0 をデコードして `Bitrate`、`Type/MIMEType/Ext` を更新。head パケットに含める |
+| Video `body[0]==0x17 && body[1]==0x00` | AVC sequence header として保存。head を再組み立て |
+| Audio `body[0]==0xAF && body[1]==0x00` | AAC sequence header として保存。head を再組み立て |
+| Video keyframe `body[0]==0x17` (上記以外) | `Channel.Write(data, pos, cont=false)` |
+| Video inter frame `body[0]==0x27` | `Channel.Write(data, pos, cont=true)` |
+| Audio (sequence header 以外) | `Channel.Write(data, pos, cont=true)` |
+
+`cont=false` (キーフレーム) を起点に新規視聴者へのストリーム配信を開始する。
+
+---
+
+## 4.2 ChannelInfo / TrackInfo
+
+チャンネルのメタデータ。
+
+```go
+type ChannelInfo struct {
+    Name     string // チャンネル名
+    URL      string // コンタクト URL
+    Desc     string // 説明
+    Comment  string // コメント
+    Genre    string // ジャンル
+    Type     string // コンテンツタイプ ("FLV" など)
+    MIMEType string // MIME タイプ ("video/x-flv" など)
+    Ext      string // 拡張子 (".flv" など)
+    Bitrate  uint32 // ビットレート (kbps)
+}
+
+type TrackInfo struct {
+    Title   string
+    Creator string
+    URL     string
+    Album   string
+}
+```
+
+---
+
+## 4.3 ContentBuffer
+
+ストリームデータを保持するバッファ。
+
+### データ構造
+
+```go
+type Content struct {
+    Pos  uint32 // ストリーム内バイト位置
+    Data []byte
+    Cont bool   // true = 継続パケット (= キーフレームでない)
+}
+
+type ContentBuffer struct {
+    header    []byte                    // 最新のストリームヘッダー
+    headerPos uint32                    // ヘッダーのストリーム位置
+    packets   [ContentBufferSize]Content // リングバッファ
+    count     int                       // 書き込み総数
+    mu        sync.RWMutex
+}
+```
+
+### 設計方針
+
+- `header`: `SetHeader` で上書き。新規接続時に必ず最初に送る
+- `packets`: 固定長リングバッファ (64 件)。満杯時は最古から上書き
+- 新規接続は `header` を送信後、`cont=false` の最初のパケット以降を送る (キーフレームスタート)
+
+### インターフェース
+
+```go
+// SetHeader はストリームヘッダーを更新する。
+func (b *ContentBuffer) SetHeader(data []byte)
+
+// Write はデータパケットを追記する。
+func (b *ContentBuffer) Write(data []byte, pos uint32, cont bool)
+
+// Header は最新のヘッダーとその位置を返す。
+func (b *ContentBuffer) Header() (data []byte, pos uint32)
+
+// OldestPos は最古パケットのストリーム位置を返す。バッファ空の場合は 0。
+func (b *ContentBuffer) OldestPos() uint32
+
+// NewestPos は最新パケットのストリーム位置を返す。バッファ空の場合は 0。
+func (b *ContentBuffer) NewestPos() uint32
+
+// Since は指定位置以降のパケットを返す。
+// pos が古すぎる場合は最古パケットから返す。空の場合は nil。
+func (b *ContentBuffer) Since(pos uint32) []Content
+
+// HasData はバッファにパケットが 1 件以上あるか返す。
+func (b *ContentBuffer) HasData() bool
+```
+
+---
+
+## 4.4 Channel
+
+```go
+type Channel struct {
+    ID          pcp.GnuID
+    BroadcastID pcp.GnuID
+    Buffer      *ContentBuffer
+    StartTime   time.Time
+
+    mu      sync.RWMutex
+    info    ChannelInfo
+    track   TrackInfo
+    outputs []OutputStream // 接続中の出力ストリーム
+}
+```
+
+`outputs` への追加・削除は `mu` で保護する。
+
+### OutputStream インターフェース
+
+```go
+type OutputStream interface {
+    NotifyHeader() // ストリームヘッダー変化時に呼ばれる
+    NotifyInfo()   // ChannelInfo 変化時に呼ばれる
+    NotifyTrack()  // TrackInfo 変化時に呼ばれる
+    Close()        // 接続を終了する
+}
+```
+
+---
+
+## 4.5 YPClient (COUT 接続)
+
+YP (root server) に PCP コントロール接続 (COUT) を確立し、チャンネル情報を定期ブロードキャストする。
+
+### 接続フロー
+
+```
+1. TCP 接続 (YP のホスト:ポート)
+2. "pcp\n" アトム + バージョン送信  ← pcp.Dial が自動処理
+3. helo 送信
+     agnt = "peercast-mm/<version>"
+     ver  = 1218
+     sid  = SessionID
+     port = 7144
+     bcid = BroadcastID
+4. oleh 受信 → rip から globalIP を取得
+5. root アトム受信 (任意)
+     root.uint: 更新間隔 (秒)。受信した値で updateInterval を上書き
+     root.upd : 即時更新要求 → 次の bcst 送信を前倒し
+6. ok 受信 → ハンドシェイク完了
+7. 初回 bcst 送信
+8. updateInterval ごとに bcst を繰り返し送信
+9. 配信終了時: quit(QUIT+SHUTDOWN) 送信
+```
+
+### bcst の構造
+
+```
+bcst
+  ttl  = 7
+  hops = 0
+  from = SessionID
+  grp  = 0x01  (ROOT のみ)
+  cid  = ChannelID
+  vers = 1218
+  chan
+    id   = ChannelID
+    bcid = BroadcastID
+    info
+      name = ChannelInfo.Name
+      url  = ChannelInfo.URL
+      desc = ChannelInfo.Desc
+      cmnt = ChannelInfo.Comment
+      gnre = ChannelInfo.Genre
+      type = ChannelInfo.Type
+      bitr = ChannelInfo.Bitrate
+    trck
+      titl = TrackInfo.Title
+      crea = TrackInfo.Creator
+      url  = TrackInfo.URL
+      albm = TrackInfo.Album
+  host
+    id   = SessionID
+    ip   = globalIP  (oleh.rip から取得)
+    port = 7144
+    numl = 0         (TODO: 実際のリスナー数)
+    numr = 0         (TODO: 実際のリレー数)
+    uptm = 稼働秒数
+    oldp = Buffer.OldestPos()
+    newp = Buffer.NewestPos()
+    cid  = ChannelID
+    flg1 = TRACKER | RELAY | DIRECT | RECV | CIN  (0x37)
+    trkr = 1
+    ver  = 1218
+    vevp = 27
+    vexp = "MM"
+    vexn = <バージョン番号>
+```
+
+### 再接続
+
+接続が切れた場合は指数バックオフ (初期 5 秒、最大 120 秒) で再接続する。
+
+---
+
+## 4.6 Listener
+
+### 責務
+
+ポート 7144 で TCP 待ち受け。先頭バイト列でプロトコルを識別し、適切な出力ストリームを生成する。
+
+### プロトコル識別
+
+先頭 16 バイトを peek して判定する (接続は消費しない)。
+
+| 先頭バイト列 | 生成するストリーム |
+|:---|:---|
+| `"GET /channel/"` | PCPOutputStream |
+| `"GET /stream/"` | HTTPOutputStream |
+| `"pcp\n"` (0x70 0x63 0x70 0x0a) | 将来拡張 (現在は切断) |
+| その他 | 不明プロトコル → 切断 |
+
+---
+
+## 4.7 PCPOutputStream (PCP リレー)
+
+下流 PeerCast ノードへ PCP でストリームを送信する。
+
+### 接続受け付けフロー
+
+```
+1. HTTP GET /channel/<channel-id> を受け取る
+   (x-peercast-pcp: 1, x-peercast-pos: <位置> などのヘッダーを含む場合がある)
+
+2. "pcp\n" アトム (12 バイト) を読み捨てる
+   [4 bytes] tag = "pcp\n"
+   [4 bytes] length = 4
+   [4 bytes] version
+
+3. helo アトム受信・バリデーション
+   - sid == 自分の SessionID → quit(QUIT+LOOPBACK)
+   - sid == ゼロ             → quit(QUIT+NOTIDENTIFIED)
+   - ver < 1200             → quit(QUIT+BADAGENT)
+
+4. HTTP/1.0 200 OK レスポンス送信
+   Content-Type: application/x-peercast-pcp
+
+5. oleh アトム送信 (HTTP レスポンスボディとして)
+     agnt = "peercast-mm/<version>"
+     sid  = SessionID
+     ver  = 1218
+     rip  = 接続元の IPv4 アドレス (uint32, big-endian で組み立て)
+
+6. 初期チャンネル情報送信
+   chan
+     id   = ChannelID
+     bcid = BroadcastID
+     info = (ChannelInfo 全フィールド)
+     trck = (TrackInfo 全フィールド)
+     pkt
+       type = "head"
+       pos  = Buffer.HeaderPos()
+       data = Buffer.Header()
+
+7. ストリームデータ送信ループ
+   - Buffer.Since(pos) で未送信パケットを取り出して送信
+   - 送信待ちがなければ 50ms スリープ
+   - 5 秒以上データが送れない場合 → 接続を切断
+   - infoCh 通知時: chan > info を送信
+   - trackCh 通知時: chan > trck を送信
+   - headerCh 通知時: chan > pkt(type=head) を送信
+   - 接続相手から bcst を受け取った場合: TTL デクリメント後に転送 (TODO)
+
+8. 終了: quit(QUIT+SHUTDOWN) 送信
+```
+
+### data パケットの形式
+
+```
+chan
+  id  = ChannelID
+  pkt
+    type = "data"
+    pos  = <バイト位置>
+    data = <FLV タグバイト列>
+    cont = 0 (keyframe) | 1 (continuation)
+```
+
+### bcst 転送ルール
+
+受信した `bcst` を転送する際のルール:
+
+- `ttl` が 0 なら転送しない
+- 転送時に `ttl -= 1`、`hops += 1`
+- `from` が自分の SessionID なら転送しない (ループ防止)
+- `dest` が特定の SessionID を指す場合はそのノードにのみ転送
+
+---
+
+## 4.8 HTTPOutputStream (HTTP 直接視聴)
+
+メディアプレイヤーへ HTTP でストリームを送信する。
+
+### フロー
+
+```
+1. HTTP GET /stream/<channel-id> を受け取る
+
+2. Buffer.HasData() を確認
+   データなし → HTTP/1.0 503 Service Unavailable を返して終了
+
+3. HTTP/1.0 200 OK レスポンス送信
+   Content-Type: <ChannelInfo.MIMEType> (デフォルト "video/x-flv")
+   icy-name:    <ChannelInfo.Name>
+   icy-genre:   <ChannelInfo.Genre>
+   icy-url:     <ChannelInfo.URL>
+   icy-bitrate: <ChannelInfo.Bitrate>
+
+4. Buffer.Header() を送信
+
+5. キーフレームを起点にストリームデータを連続送信
+   - cont=false のパケット (キーフレーム) が来るまで cont=true のパケットをスキップ
+   - 以降は全パケットを順次送信
+   - 書き込みタイムアウト: 60 秒 (パケットごとに更新)
+   - ポーリング間隔: 200ms
+```
+
+> **注意**: HTTPOutputStream はメタデータ通知 (`infoCh`、`trackCh`、`headerCh`) を受け取っても
+> HTTP ストリームには反映しない。ICY メタデータ (`icy-metaint`) は現在未実装。

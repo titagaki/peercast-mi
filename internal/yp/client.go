@@ -85,6 +85,7 @@ func (c *Client) run() error {
 	}
 
 	updateInterval := defaultInterval
+	sendImmediately := false
 
 	// Read oleh + optional root + ok.
 	for {
@@ -101,8 +102,7 @@ func (c *Client) run() error {
 				updateInterval = time.Duration(interval) * time.Second
 			}
 			if immediate {
-				// Send bcst immediately after ok.
-				_ = immediate
+				sendImmediately = true
 			}
 		case pcp.PCPOK:
 			goto handshakeDone
@@ -117,7 +117,8 @@ handshakeDone:
 	ticker := time.NewTicker(updateInterval)
 	defer ticker.Stop()
 
-	// Send initial bcst.
+	// Send initial bcst (always, or immediately if requested by root > upd).
+	_ = sendImmediately
 	if err := conn.WriteAtom(c.buildBcst()); err != nil {
 		return fmt.Errorf("write bcst: %w", err)
 	}
@@ -183,7 +184,7 @@ func (c *Client) buildBcst() *pcp.Atom {
 		chanTrack,
 	)
 
-	flags := byte(pcp.PCPHostFlags1Relay | pcp.PCPHostFlags1Direct | pcp.PCPHostFlags1Recv | pcp.PCPHostFlags1CIN)
+	flags := byte(pcp.PCPHostFlags1Tracker | pcp.PCPHostFlags1Relay | pcp.PCPHostFlags1Direct | pcp.PCPHostFlags1Recv | pcp.PCPHostFlags1CIN)
 	hostAtom := pcp.NewParentAtom(pcp.PCPHost,
 		pcp.NewIDAtom(pcp.PCPHostID, c.sessionID),
 		pcp.NewIntAtom(pcp.PCPHostIP, c.globalIP),
@@ -195,6 +196,7 @@ func (c *Client) buildBcst() *pcp.Atom {
 		pcp.NewIntAtom(pcp.PCPHostNewPos, buf.NewestPos()),
 		pcp.NewIDAtom(pcp.PCPHostChanID, c.ch.ID),
 		pcp.NewByteAtom(pcp.PCPHostFlags1, flags),
+		pcp.NewIntAtom(pcp.PCPHostTracker, 1),
 		pcp.NewIntAtom(pcp.PCPHostVersion, version.PCPVersion),
 		pcp.NewIntAtom(pcp.PCPHostVersionVP, version.PCPVersionVP),
 		pcp.NewBytesAtom(pcp.PCPHostVersionExPrefix, []byte(version.ExPrefix)),
@@ -205,7 +207,7 @@ func (c *Client) buildBcst() *pcp.Atom {
 		pcp.NewByteAtom(pcp.PCPBcstTTL, bcstTTL),
 		pcp.NewByteAtom(pcp.PCPBcstHops, 0),
 		pcp.NewIDAtom(pcp.PCPBcstFrom, c.sessionID),
-		pcp.NewByteAtom(pcp.PCPBcstGroup, byte(pcp.PCPBcstGroupRoot|pcp.PCPBcstGroupTrackers)),
+		pcp.NewByteAtom(pcp.PCPBcstGroup, byte(pcp.PCPBcstGroupRoot)),
 		pcp.NewIDAtom(pcp.PCPBcstChanID, c.ch.ID),
 		pcp.NewIntAtom(pcp.PCPBcstVersion, version.PCPVersion),
 		chanAtom,

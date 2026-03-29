@@ -14,12 +14,13 @@ internal/
     channel.go             Channel (OutputStream ファンアウト)
   rtmp/server.go           RTMPServer (yutopp/go-rtmp ラッパー、FLV タグ変換)
   yp/client.go             YPClient (COUT 接続・bcst ループ・指数バックオフ再接続)
-  output/
-    listener.go            OutputListener (ポート 7144、プロトコル識別)
+  servent/
+    listener.go            Listener (ポート 7144、プロトコル識別)
     pcp.go                 PCPOutputStream (下流リレーノードへの PCP 送信)
     http.go                HTTPOutputStream (メディアプレイヤーへの HTTP 送信)
 docs/
-  broadcasting-node-spec.md  実装仕様書
+  spec.md                  実装仕様書 (概要・アーキテクチャ・ライフサイクル)
+  spec-components.md       実装仕様書 (コンポーネント詳細)
   protocol/
     PCP_SPEC.md            PCP プロトコル仕様
     broadcasting.md        配信プロトコルメモ
@@ -68,6 +69,6 @@ go run . -name "チャンネル名" -genre "ジャンル" -yp yp.example.com:714
 
 ## 作業の進め方
 
-- 仕様は `docs/broadcasting-node-spec.md` を参照
+- 仕様は `docs/spec.md` / `docs/spec-components.md` を参照
 - PCP プロトコルの詳細は `docs/protocol/PCP_SPEC.md` を参照
 - peercast-pcp の API は `go doc github.com/titagaki/peercast-pcp/pcp` で確認

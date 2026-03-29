@@ -95,15 +95,10 @@ func (o *PCPOutputStream) handshake() error {
 	}
 	_ = req.Body.Close()
 
-	// Read "pcp\n" magic atom.
-	magic := make([]byte, 4)
-	if _, err := io.ReadFull(o.br, magic); err != nil {
+	// Read "pcp\n" magic atom: 4-byte tag + 4-byte length field + 4-byte version payload.
+	pcpMagic := make([]byte, 12)
+	if _, err := io.ReadFull(o.br, pcpMagic); err != nil {
 		return fmt.Errorf("read pcp magic: %w", err)
-	}
-	// Read zero-length payload of the magic atom (4 bytes tag already read, skip 4-byte length).
-	lenBuf := make([]byte, 4)
-	if _, err := io.ReadFull(o.br, lenBuf); err != nil {
-		return fmt.Errorf("read pcp magic length: %w", err)
 	}
 
 	// Read helo.
@@ -140,6 +135,12 @@ func (o *PCPOutputStream) handshake() error {
 		}
 	}
 
+	// Send HTTP 200 OK first; oleh goes in the response body.
+	resp := "HTTP/1.0 200 OK\r\nContent-Type: application/x-peercast-pcp\r\n\r\n"
+	if _, err := io.WriteString(o.conn, resp); err != nil {
+		return fmt.Errorf("write HTTP response: %w", err)
+	}
+
 	// Send oleh.
 	remoteIP := ipToUint32(o.conn.RemoteAddr())
 	oleh := pcp.NewParentAtom(pcp.PCPOleh,
@@ -150,12 +151,6 @@ func (o *PCPOutputStream) handshake() error {
 	)
 	if err := oleh.Write(o.conn); err != nil {
 		return fmt.Errorf("write oleh: %w", err)
-	}
-
-	// Send HTTP 200 OK.
-	resp := "HTTP/1.0 200 OK\r\nContent-Type: application/x-peercast-pcp\r\n\r\n"
-	if _, err := io.WriteString(o.conn, resp); err != nil {
-		return fmt.Errorf("write HTTP response: %w", err)
 	}
 
 	return nil
