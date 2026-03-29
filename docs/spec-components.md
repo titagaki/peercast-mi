@@ -162,30 +162,66 @@ func (b *ContentBuffer) HasData() bool
 ## 4.4 Channel
 
 ```go
+type OutputStreamType int
+
+const (
+    OutputStreamPCP  OutputStreamType = iota // PCPOutputStream (下流リレーノード)
+    OutputStreamHTTP                         // HTTPOutputStream (視聴プレイヤー)
+)
+
+type OutputStream interface {
+    NotifyHeader() // ストリームヘッダー変化時に呼ばれる
+    NotifyInfo()   // ChannelInfo 変化時に呼ばれる
+    NotifyTrack()  // TrackInfo 変化時に呼ばれる
+    Close()        // 接続を終了する
+    Type() OutputStreamType // PCP / HTTP の種別
+    ID() int                // Listener が払い出す接続ID
+    RemoteAddr() string     // 接続元アドレス ("host:port")
+    SendRate() int64        // 直近 1 秒間の送信バイト数
+}
+
+// ConnectionInfo は接続中の出力ストリームのスナップショット。
+type ConnectionInfo struct {
+    ID         int
+    Type       OutputStreamType
+    RemoteAddr string
+    SendRate   int64
+}
+
 type Channel struct {
     ID          pcp.GnuID
     BroadcastID pcp.GnuID
     Buffer      *ContentBuffer
     StartTime   time.Time
 
-    mu      sync.RWMutex
-    info    ChannelInfo
-    track   TrackInfo
-    outputs []OutputStream // 接続中の出力ストリーム
+    mu           sync.RWMutex
+    info         ChannelInfo
+    track        TrackInfo
+    outputs      []OutputStream
+    numListeners int // HTTPOutputStream の数
+    numRelays    int // PCPOutputStream の数
 }
 ```
 
-`outputs` への追加・削除は `mu` で保護する。
+`outputs` への追加・削除は `mu` で保護する。`AddOutput` / `RemoveOutput` 時に `numListeners` / `numRelays` を更新する。
 
-### OutputStream インターフェース
+### メソッド
 
 ```go
-type OutputStream interface {
-    NotifyHeader() // ストリームヘッダー変化時に呼ばれる
-    NotifyInfo()   // ChannelInfo 変化時に呼ばれる
-    NotifyTrack()  // TrackInfo 変化時に呼ばれる
-    Close()        // 接続を終了する
-}
+func (c *Channel) Info() ChannelInfo
+func (c *Channel) Track() TrackInfo
+func (c *Channel) SetInfo(info ChannelInfo)   // 更新後に全 outputs へ NotifyInfo()
+func (c *Channel) SetTrack(track TrackInfo)   // 更新後に全 outputs へ NotifyTrack()
+func (c *Channel) SetHeader(data []byte)      // Buffer 更新後に全 outputs へ NotifyHeader()
+func (c *Channel) Write(data []byte, pos uint32, cont bool)
+func (c *Channel) AddOutput(o OutputStream)
+func (c *Channel) RemoveOutput(o OutputStream)
+func (c *Channel) NumListeners() int
+func (c *Channel) NumRelays() int
+func (c *Channel) CloseAll()                  // 全接続に Close() を呼ぶ
+func (c *Channel) UptimeSeconds() uint32
+func (c *Channel) Connections() []ConnectionInfo
+func (c *Channel) CloseConnection(id int) bool
 ```
 
 ---
@@ -245,8 +281,8 @@ bcst
     id   = SessionID
     ip   = globalIP  (oleh.rip から取得)
     port = 7144
-    numl = 0         (TODO: 実際のリスナー数)
-    numr = 0         (TODO: 実際のリレー数)
+    numl = Channel.NumListeners()
+    numr = Channel.NumRelays()
     uptm = 稼働秒数
     oldp = Buffer.OldestPos()
     newp = Buffer.NewestPos()
@@ -275,11 +311,12 @@ bcst
 
 先頭 16 バイトを peek して判定する (接続は消費しない)。
 
-| 先頭バイト列 | 生成するストリーム |
+| 先頭バイト列 | 処理 |
 |:---|:---|
-| `"GET /channel/"` | PCPOutputStream |
-| `"GET /stream/"` | HTTPOutputStream |
-| `"pcp\n"` (0x70 0x63 0x70 0x0a) | 将来拡張 (現在は切断) |
+| `"GET /channel/"` | PCPOutputStream を生成 |
+| `"GET /stream/"` | HTTPOutputStream を生成 |
+| `"pcp\n"` (0x70 0x63 0x70 0x0a) | `handlePing()` — YP ファイアウォール疎通確認 |
+| `"POST /api"` | JSON-RPC API ハンドラーへ転送 |
 | その他 | 不明プロトコル → 切断 |
 
 ---
@@ -389,3 +426,12 @@ chan
 
 > **注意**: HTTPOutputStream はメタデータ通知 (`infoCh`、`trackCh`、`headerCh`) を受け取っても
 > HTTP ストリームには反映しない。ICY メタデータ (`icy-metaint`) は現在未実装。
+
+---
+
+## 4.9 JSON-RPC API (`internal/jsonrpc`)
+
+`POST /api/1` で JSON-RPC 2.0 リクエストを受け付ける管理 API。
+`Listener` が `POST /api` 接続を検出して `jsonrpc.Server.Handler()` に転送する。
+
+API の詳細仕様 (メソッド一覧・リクエスト/レスポンス形式・フィールド説明) は [docs/api/jsonrpc.md](api/jsonrpc.md) を参照。
