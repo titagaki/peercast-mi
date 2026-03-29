@@ -10,6 +10,7 @@ import (
 	"github.com/titagaki/peercast-mm/internal/channel"
 	"github.com/titagaki/peercast-mm/internal/config"
 	"github.com/titagaki/peercast-mm/internal/id"
+	"github.com/titagaki/peercast-mm/internal/jsonrpc"
 	"github.com/titagaki/peercast-mm/internal/rtmp"
 	"github.com/titagaki/peercast-mm/internal/servent"
 	"github.com/titagaki/peercast-mm/internal/yp"
@@ -63,6 +64,9 @@ func main() {
 		}
 	}()
 
+	// JSON-RPC API will be wired after YP setup (ypClient may be nil).
+	var ypClientForAPI *yp.Client
+
 	// Start YPClient if configured.
 	ypEntry, err := cfg.FindYP(*ypName)
 	if err != nil {
@@ -73,12 +77,18 @@ func main() {
 			log.Fatalf("yp: invalid addr %q: %v", ypEntry.Addr, err)
 		}
 		ypClient := yp.New(hostPort, sessionID, broadcastID, ch)
+		ypClientForAPI = ypClient
 		go func() {
 			log.Printf("yp: connecting to %s (%s)", ypEntry.Addr, ypEntry.Name)
 			ypClient.Run()
 		}()
 		defer ypClient.Stop()
 	}
+
+	// Wire JSON-RPC API handler into the listener.
+	apiServer := jsonrpc.New(sessionID, ch, cfg, ypClientForAPI)
+	listener.SetAPIHandler(apiServer.Handler())
+	log.Printf("api: JSON-RPC endpoint available at POST /api/1 on :%d", cfg.PeercastPort)
 
 	// Start RTMP server.
 	rtmpServer := rtmp.NewServer(ch, cfg.RTMPPort)

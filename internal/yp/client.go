@@ -32,6 +32,7 @@ type Client struct {
 	globalIP uint32 // learned from oleh.rip
 
 	stopCh chan struct{}
+	bumpCh chan struct{}
 }
 
 // New creates a new YPClient.
@@ -43,6 +44,7 @@ func New(addr string, sessionID, broadcastID pcp.GnuID, ch *channel.Channel) *Cl
 		ch:          ch,
 		listenPort:  defaultPCPPort,
 		stopCh:      make(chan struct{}),
+		bumpCh:      make(chan struct{}, 1),
 	}
 }
 
@@ -70,6 +72,14 @@ func (c *Client) Run() {
 // Stop signals the client to shut down.
 func (c *Client) Stop() {
 	close(c.stopCh)
+}
+
+// Bump triggers an immediate bcst send to the YP.
+func (c *Client) Bump() {
+	select {
+	case c.bumpCh <- struct{}{}:
+	default:
+	}
 }
 
 func (c *Client) run() error {
@@ -131,6 +141,10 @@ handshakeDone:
 		case <-ticker.C:
 			if err := conn.WriteAtom(c.buildBcst()); err != nil {
 				return fmt.Errorf("write bcst: %w", err)
+			}
+		case <-c.bumpCh:
+			if err := conn.WriteAtom(c.buildBcst()); err != nil {
+				return fmt.Errorf("write bcst (bump): %w", err)
 			}
 		}
 	}

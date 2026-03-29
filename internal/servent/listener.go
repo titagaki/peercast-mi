@@ -2,10 +2,12 @@ package servent
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"sync/atomic"
 
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -22,6 +24,7 @@ type Listener struct {
 	port       int
 	listener   net.Listener
 	nextConnID atomic.Int64
+	apiHandler http.Handler // JSON-RPC handler for POST /api/; may be nil
 }
 
 // NewListener creates a new Listener.
@@ -31,6 +34,11 @@ func NewListener(sessionID pcp.GnuID, ch *channel.Channel, port int) *Listener {
 		ch:        ch,
 		port:      port,
 	}
+}
+
+// SetAPIHandler sets the HTTP handler used for POST /api/ requests.
+func (l *Listener) SetAPIHandler(h http.Handler) {
+	l.apiHandler = h
 }
 
 // ListenAndServe starts listening on the configured PeerCast port.
@@ -90,6 +98,13 @@ func (l *Listener) handle(conn net.Conn) {
 		log.Printf("servent: ping connection from %s", conn.RemoteAddr())
 		handlePing(conn, br, l.sessionID)
 
+	case startsWith(peek, "POST /api"):
+		if l.apiHandler != nil {
+			l.handleAPIRequest(conn, br)
+		} else {
+			conn.Close()
+		}
+
 	default:
 		log.Printf("servent: unknown protocol from %s, closing", conn.RemoteAddr())
 		conn.Close()
@@ -106,6 +121,49 @@ func startsWith(data []byte, prefix string) bool {
 		}
 	}
 	return true
+}
+
+// handleAPIRequest handles a JSON-RPC request forwarded from the listener.
+func (l *Listener) handleAPIRequest(conn net.Conn, br *bufio.Reader) {
+	defer conn.Close()
+	req, err := http.ReadRequest(br)
+	if err != nil {
+		return
+	}
+	defer req.Body.Close()
+	rw := newAPIResponseWriter(conn)
+	l.apiHandler.ServeHTTP(rw, req)
+	rw.flush()
+}
+
+// apiResponseWriter is a minimal http.ResponseWriter that buffers the response
+// body and writes it to the underlying connection as a plain HTTP/1.0 response.
+type apiResponseWriter struct {
+	conn   net.Conn
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func newAPIResponseWriter(conn net.Conn) *apiResponseWriter {
+	return &apiResponseWriter{conn: conn, header: make(http.Header), status: http.StatusOK}
+}
+
+func (w *apiResponseWriter) Header() http.Header          { return w.header }
+func (w *apiResponseWriter) WriteHeader(code int)         { w.status = code }
+func (w *apiResponseWriter) Write(b []byte) (int, error)  { return w.body.Write(b) }
+
+func (w *apiResponseWriter) flush() {
+	body := w.body.Bytes()
+	resp := &http.Response{
+		StatusCode:    w.status,
+		ProtoMajor:    1,
+		ProtoMinor:    0,
+		Header:        w.header,
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+	resp.Write(w.conn)
 }
 
 // handlePing handles a firewall reachability check connection from the YP.
