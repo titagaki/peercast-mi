@@ -1,6 +1,6 @@
 # peercast-mm
 
-RTMP で受け取ったストリームを PCP ネットワークに配信する Go 製 PeerCast ブロードキャストノード。
+RTMP で受け取ったストリームを PCP ネットワークに配信する Go 製 PeerCast。
 
 ## 必要なもの
 
