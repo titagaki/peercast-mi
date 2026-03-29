@@ -27,6 +27,20 @@ type OutputStream interface {
 	Close()
 	// Type returns whether this is a PCP relay or HTTP direct stream.
 	Type() OutputStreamType
+	// ID returns the unique connection identifier assigned by the Listener.
+	ID() int
+	// RemoteAddr returns the remote address string (e.g. "203.0.113.1:7144").
+	RemoteAddr() string
+	// SendRate returns bytes sent per second (last full second).
+	SendRate() int64
+}
+
+// ConnectionInfo is a snapshot of an active output connection.
+type ConnectionInfo struct {
+	ID         int
+	Type       OutputStreamType
+	RemoteAddr string
+	SendRate   int64
 }
 
 // Channel is the central data structure for an active broadcast.
@@ -167,4 +181,39 @@ func (c *Channel) CloseAll() {
 // UptimeSeconds returns the number of seconds since the channel started.
 func (c *Channel) UptimeSeconds() uint32 {
 	return uint32(time.Since(c.StartTime).Seconds())
+}
+
+// Connections returns a snapshot of all active output connections.
+func (c *Channel) Connections() []ConnectionInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make([]ConnectionInfo, len(c.outputs))
+	for i, o := range c.outputs {
+		result[i] = ConnectionInfo{
+			ID:         o.ID(),
+			Type:       o.Type(),
+			RemoteAddr: o.RemoteAddr(),
+			SendRate:   o.SendRate(),
+		}
+	}
+	return result
+}
+
+// CloseConnection closes the output connection with the given ID.
+// Returns true if found and closed, false if no connection with that ID exists.
+func (c *Channel) CloseConnection(id int) bool {
+	c.mu.RLock()
+	var target OutputStream
+	for _, o := range c.outputs {
+		if o.ID() == id {
+			target = o
+			break
+		}
+	}
+	c.mu.RUnlock()
+	if target == nil {
+		return false
+	}
+	target.Close()
+	return true
 }

@@ -25,34 +25,47 @@ const (
 
 // PCPOutputStream sends PCP stream data to a downstream relay node.
 type PCPOutputStream struct {
-	conn      net.Conn
-	br        *bufio.Reader
-	sessionID pcp.GnuID
-	ch        *channel.Channel
+	conn       *countingConn
+	br         *bufio.Reader
+	sessionID  pcp.GnuID
+	ch         *channel.Channel
+	id         int
+	remoteAddr string
 
-	mu        sync.Mutex
-	closed    bool
-	headerCh  chan struct{}
-	infoCh    chan struct{}
-	trackCh   chan struct{}
-	closeCh   chan struct{}
+	mu       sync.Mutex
+	closed   bool
+	headerCh chan struct{}
+	infoCh   chan struct{}
+	trackCh  chan struct{}
+	closeCh  chan struct{}
 }
 
-func newPCPOutputStream(conn net.Conn, br *bufio.Reader, sessionID pcp.GnuID, ch *channel.Channel) *PCPOutputStream {
+func newPCPOutputStream(conn *countingConn, br *bufio.Reader, sessionID pcp.GnuID, ch *channel.Channel, id int) *PCPOutputStream {
 	return &PCPOutputStream{
-		conn:      conn,
-		br:        br,
-		sessionID: sessionID,
-		ch:        ch,
-		headerCh:  make(chan struct{}, 1),
-		infoCh:    make(chan struct{}, 1),
-		trackCh:   make(chan struct{}, 1),
-		closeCh:   make(chan struct{}),
+		conn:       conn,
+		br:         br,
+		sessionID:  sessionID,
+		ch:         ch,
+		id:         id,
+		remoteAddr: conn.RemoteAddr().String(),
+		headerCh:   make(chan struct{}, 1),
+		infoCh:     make(chan struct{}, 1),
+		trackCh:    make(chan struct{}, 1),
+		closeCh:    make(chan struct{}),
 	}
 }
 
 // Type implements channel.OutputStream.
 func (o *PCPOutputStream) Type() channel.OutputStreamType { return channel.OutputStreamPCP }
+
+// ID implements channel.OutputStream.
+func (o *PCPOutputStream) ID() int { return o.id }
+
+// RemoteAddr implements channel.OutputStream.
+func (o *PCPOutputStream) RemoteAddr() string { return o.remoteAddr }
+
+// SendRate implements channel.OutputStream.
+func (o *PCPOutputStream) SendRate() int64 { return o.conn.sent.rate() }
 
 // NotifyHeader implements channel.OutputStream.
 func (o *PCPOutputStream) NotifyHeader() { notify(o.headerCh) }

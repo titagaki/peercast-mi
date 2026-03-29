@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync/atomic"
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
@@ -16,10 +17,11 @@ import (
 // Listener accepts incoming connections on the PeerCast port and dispatches them
 // to the appropriate output stream handler.
 type Listener struct {
-	sessionID pcp.GnuID
-	ch        *channel.Channel
-	port      int
-	listener  net.Listener
+	sessionID  pcp.GnuID
+	ch         *channel.Channel
+	port       int
+	listener   net.Listener
+	nextConnID atomic.Int64
 }
 
 // NewListener creates a new Listener.
@@ -57,6 +59,7 @@ func (l *Listener) Close() {
 }
 
 func (l *Listener) handle(conn net.Conn) {
+	cc := newCountingConn(conn)
 	br := bufio.NewReader(conn)
 
 	// Peek up to 16 bytes to identify the protocol.
@@ -68,15 +71,17 @@ func (l *Listener) handle(conn net.Conn) {
 
 	switch {
 	case startsWith(peek, "GET /channel/"):
-		log.Printf("servent: PCP relay connection from %s", conn.RemoteAddr())
-		h := newPCPOutputStream(conn, br, l.sessionID, l.ch)
+		id := int(l.nextConnID.Add(1))
+		log.Printf("servent: PCP relay connection from %s (id=%d)", conn.RemoteAddr(), id)
+		h := newPCPOutputStream(cc, br, l.sessionID, l.ch, id)
 		l.ch.AddOutput(h)
 		h.run()
 		l.ch.RemoveOutput(h)
 
 	case startsWith(peek, "GET /stream/"):
-		log.Printf("servent: HTTP direct connection from %s", conn.RemoteAddr())
-		h := newHTTPOutputStream(conn, br, l.ch)
+		id := int(l.nextConnID.Add(1))
+		log.Printf("servent: HTTP direct connection from %s (id=%d)", conn.RemoteAddr(), id)
+		h := newHTTPOutputStream(cc, br, l.ch, id)
 		l.ch.AddOutput(h)
 		h.run()
 		l.ch.RemoveOutput(h)

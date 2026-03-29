@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -21,9 +20,11 @@ const (
 
 // HTTPOutputStream sends raw FLV data to a media player over HTTP.
 type HTTPOutputStream struct {
-	conn net.Conn
-	br   *bufio.Reader
-	ch   *channel.Channel
+	conn       *countingConn
+	br         *bufio.Reader
+	ch         *channel.Channel
+	id         int
+	remoteAddr string
 
 	mu       sync.Mutex
 	closed   bool
@@ -33,20 +34,31 @@ type HTTPOutputStream struct {
 	closeCh  chan struct{}
 }
 
-func newHTTPOutputStream(conn net.Conn, br *bufio.Reader, ch *channel.Channel) *HTTPOutputStream {
+func newHTTPOutputStream(conn *countingConn, br *bufio.Reader, ch *channel.Channel, id int) *HTTPOutputStream {
 	return &HTTPOutputStream{
-		conn:     conn,
-		br:       br,
-		ch:       ch,
-		headerCh: make(chan struct{}, 1),
-		infoCh:   make(chan struct{}, 1),
-		trackCh:  make(chan struct{}, 1),
-		closeCh:  make(chan struct{}),
+		conn:       conn,
+		br:         br,
+		ch:         ch,
+		id:         id,
+		remoteAddr: conn.RemoteAddr().String(),
+		headerCh:   make(chan struct{}, 1),
+		infoCh:     make(chan struct{}, 1),
+		trackCh:    make(chan struct{}, 1),
+		closeCh:    make(chan struct{}),
 	}
 }
 
 // Type implements channel.OutputStream.
 func (o *HTTPOutputStream) Type() channel.OutputStreamType { return channel.OutputStreamHTTP }
+
+// ID implements channel.OutputStream.
+func (o *HTTPOutputStream) ID() int { return o.id }
+
+// RemoteAddr implements channel.OutputStream.
+func (o *HTTPOutputStream) RemoteAddr() string { return o.remoteAddr }
+
+// SendRate implements channel.OutputStream.
+func (o *HTTPOutputStream) SendRate() int64 { return o.conn.sent.rate() }
 
 // NotifyHeader implements channel.OutputStream.
 func (o *HTTPOutputStream) NotifyHeader() { notify(o.headerCh) }
