@@ -203,25 +203,37 @@ type ConnectionInfo struct {
 }
 
 type Channel struct {
-    ID          pcp.GnuID
-    BroadcastID pcp.GnuID
-    Buffer      *ContentBuffer
-    StartTime   time.Time
+    ID        pcp.GnuID
+    Buffer    *ContentBuffer
+    StartTime time.Time
 
-    mu           sync.RWMutex
-    info         ChannelInfo
-    track        TrackInfo
-    outputs      []OutputStream
-    numListeners int // HTTPOutputStream の数
-    numRelays    int // PCPOutputStream の数
+    mu             sync.RWMutex
+    broadcastID    pcp.GnuID
+    isBroadcasting bool   // true = RTMP ソース、false = リレー
+    source         string // 表示用ソース文字列
+    upstreamAddr   string // リレーチャンネルの上流 host:port
+    info           ChannelInfo
+    track          TrackInfo
+    outputs        []OutputStream
+    numListeners   int // HTTPOutputStream の数
+    numRelays      int // PCPOutputStream の数
 }
 ```
 
 `outputs` への追加・削除は `mu` で保護する。`AddOutput` / `RemoveOutput` 時に `numListeners` / `numRelays` を更新する。
 
+`broadcastID` はブロードキャストチャンネルでは Manager の broadcastID を使用する。リレーチャンネルでは初期値ゼロで生成し、上流から受け取った `chan.bcid` で `SetBroadcastID()` により上書きされる。
+
 ### メソッド
 
 ```go
+func (c *Channel) BroadcastID() pcp.GnuID
+func (c *Channel) SetBroadcastID(id pcp.GnuID)
+func (c *Channel) IsBroadcasting() bool
+func (c *Channel) Source() string
+func (c *Channel) SetSource(s string)
+func (c *Channel) UpstreamAddr() string
+func (c *Channel) SetUpstreamAddr(addr string)
 func (c *Channel) Info() ChannelInfo
 func (c *Channel) Track() TrackInfo
 func (c *Channel) SetInfo(info ChannelInfo)   // 更新後に全 outputs へ NotifyInfo()
@@ -240,7 +252,64 @@ func (c *Channel) CloseConnection(id int) bool
 
 ---
 
-## 4.5 YPClient (COUT 接続)
+## 4.5 RelayClient (上流 PCP 接続)
+
+上流 PeerCast ノードへ PCP でストリームを受信し、Channel に書き込む。
+
+### 接続フロー
+
+```
+1. TCP 接続 (upstreamAddr = "host:port")
+
+2. HTTP GET /channel/<channelIdHex> HTTP/1.0 を送信
+
+3. pcp\n magic (12 バイト) を送信
+   [4 bytes] tag = "pcp\n"
+   [4 bytes] size = 4 (LE)
+   [4 bytes] version = 1 (LE)
+
+4. helo アトム送信
+     agnt = "peercast-mm/<version>"
+     sid  = SessionID
+     ver  = 1218
+
+5. HTTP/1.0 200 OK レスポンス (ヘッダー部のみ) を読み捨て
+
+6. oleh アトム受信
+
+7. 初期 chan アトム受信
+   chan
+     id   = ChannelID
+     bcid = BroadcastID → Channel.SetBroadcastID()
+     info = ChannelInfo → Channel.SetInfo()
+     trck = TrackInfo   → Channel.SetTrack()
+     pkt (type="head")  → Channel.SetHeader()
+
+8. ストリームデータ受信ループ
+   - chan > pkt(type="data") を受け取るたびに Channel.Write()
+   - chan > info / trck を受け取るたびに Channel.SetInfo() / Channel.SetTrack()
+   - quit アトム受信 → 接続切断・再接続
+
+9. タイムアウト (60 秒) で quit なく無音 → 接続切断・再接続
+```
+
+### 再接続
+
+接続失敗・切断時は指数バックオフ (初期 5 秒、最大 120 秒) で再接続する。`Stop()` が呼ばれると再接続ループを終了する。
+
+Channel オブジェクトは再接続をまたいで維持されるため、下流の PCP リレー接続・HTTP 視聴接続は継続する。ただし、ヘッダーが再送されるまでの間は下流ノードは待機状態になる。
+
+### API
+
+```go
+func New(upstreamAddr string, channelID, sessionID pcp.GnuID, ch *channel.Channel) *Client
+func (c *Client) Run()   // 再接続ループ。goroutine として呼ぶ
+func (c *Client) Stop()  // 停止シグナルを送り、Run() の終了を待つ
+```
+
+---
+
+## 4.6 YPClient (COUT 接続)
 
 YP (root server) に PCP コントロール接続 (COUT) を確立し、チャンネル情報を定期ブロードキャストする。
 
@@ -315,7 +384,7 @@ bcst
 
 ---
 
-## 4.6 Listener
+## 4.7 Listener
 
 ### 責務
 
@@ -335,7 +404,7 @@ bcst
 
 ---
 
-## 4.7 PCPOutputStream (PCP リレー)
+## 4.8 PCPOutputStream (PCP リレー)
 
 下流 PeerCast ノードへ PCP でストリームを送信する。
 
@@ -410,7 +479,7 @@ chan
 
 ---
 
-## 4.8 HTTPOutputStream (HTTP 直接視聴)
+## 4.9 HTTPOutputStream (HTTP 直接視聴)
 
 メディアプレイヤーへ HTTP でストリームを送信する。
 
@@ -443,7 +512,7 @@ chan
 
 ---
 
-## 4.9 JSON-RPC API (`internal/jsonrpc`)
+## 4.10 JSON-RPC API (`internal/jsonrpc`)
 
 `POST /api/1` で JSON-RPC 2.0 リクエストを受け付ける管理 API。
 `Listener` が `POST /api` 接続を検出して `jsonrpc.Server.Handler()` に転送する。

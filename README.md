@@ -1,8 +1,8 @@
 # peercast-mm
 
-RTMP で受け取ったストリームを PCP ネットワークに配信する Go 製 PeerCast。
+Go 製 PeerCast ノード。**ブロードキャストノード**（RTMP → PCP）と**リレーノード**（上流 PeerCast ノードから受け取って中継）の両方に対応する。
 
-複数チャンネルを同時に配信できる。チャンネルは起動時ではなく JSON-RPC API で動的に作成する。
+複数チャンネルを同時に扱える。チャンネルは起動時ではなく JSON-RPC API で動的に作成する。
 
 ## 必要なもの
 
@@ -123,6 +123,26 @@ curl -s -X POST http://localhost:7144/api/1 \
 
 チャンネルが停止してもストリームキーは残るため、手順 3 から繰り返せる。
 
+## リレーチャンネルの開始
+
+他の PeerCast ノードからストリームを受け取って中継する。チャンネル ID と上流ノードのアドレスを指定する。
+
+```sh
+curl -s -X POST http://localhost:7144/api/1 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc":"2.0","method":"relayChannel","params":[{
+      "upstreamAddr": "192.168.1.10:7144",
+      "channelId":    "0123456789abcdef0123456789abcdef"
+    }],"id":1}'
+```
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"channelId":"0123456789abcdef0123456789abcdef"}}
+```
+
+接続失敗時は指数バックオフ（5 秒〜120 秒）で自動再接続する。`stopChannel` で停止できる。
+
 ## 視聴・リレー
 
 peercast-mm はポート 7144 で待ち受ける。
@@ -132,7 +152,7 @@ peercast-mm はポート 7144 で待ち受ける。
 | `http://localhost:7144/stream/<channelId>` | メディアプレイヤーで直接視聴 |
 | `http://localhost:7144/channel/<channelId>` | PeerCast ノードからのリレー接続 |
 
-`channelId` は `broadcastChannel` の返却値、または `getChannels` で確認できる。
+`channelId` は `broadcastChannel` / `relayChannel` の返却値、または `getChannels` で確認できる。
 
 ## JSON-RPC API
 
@@ -141,8 +161,9 @@ peercast-mm はポート 7144 で待ち受ける。
 | メソッド | 説明 |
 |---|---|
 | `issueStreamKey` | ストリームキーを発行する |
-| `broadcastChannel` | チャンネルを開始する |
-| `getChannels` | 配信中チャンネルの一覧 |
+| `broadcastChannel` | ブロードキャストチャンネルを開始する |
+| `relayChannel` | リレーチャンネルを開始する |
+| `getChannels` | チャンネルの一覧 |
 | `getChannelInfo` | チャンネル情報を取得 |
 | `getChannelStatus` | チャンネルステータスを取得 |
 | `setChannelInfo` | チャンネル情報を更新 |

@@ -56,6 +56,7 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (
 |---|---|---|
 | `issueStreamKey` | なし | `{ streamKey }` |
 | `broadcastChannel` | `[{ sourceUri, info, track }]` | `{ channelId }` |
+| `relayChannel` | `[{ upstreamAddr, channelId }]` | `{ channelId }` |
 | `getVersionInfo` | なし | `{ agentName }` |
 | `getSettings` | なし | `{ serverPort, rtmpPort }` |
 | `getChannels` | なし | チャンネルオブジェクトの配列 |
@@ -134,6 +135,40 @@ ChannelID は入力パラメータから決定論的に生成される。同じ 
 - `sourceUri` に `/live/<streamKey>` 形式がない → `-32602`
 - ストリームキーが未発行 (`issueStreamKey` を呼んでいない) → `-32602`
 - そのストリームキーで既に放送中 (`stopChannel` してから再呼び出しする) → `-32602`
+
+---
+
+### `relayChannel`
+
+**パラメータ:** `[{ upstreamAddr, channelId }]`
+
+指定した上流 PeerCast ノードからストリームを受け取るリレーチャンネルを開始する。
+
+```json
+[{
+  "upstreamAddr": "192.168.1.10:7144",
+  "channelId":    "0123456789abcdef0123456789abcdef"
+}]
+```
+
+| フィールド | 説明 |
+|---|---|
+| `upstreamAddr` | 上流ノードの `host:port`。省略した場合は config の先頭 YP アドレスを使用 |
+| `channelId` | リレーするチャンネルの ID (32 文字 hex) |
+
+**返却値:**
+```json
+{ "channelId": "0123456789abcdef0123456789abcdef" }
+```
+
+接続は非同期で確立される。返却直後はまだ上流に接続していない場合がある。`getChannelStatus` の `isReceiving` が `true` になれば受信開始。
+
+接続失敗・切断時は指数バックオフ (5 秒〜120 秒) で自動再接続する。
+
+**エラー条件:**
+- `channelId` が 32 文字 hex でない → `-32602`
+- 同じ `channelId` のチャンネルが既に存在する → `-32602`
+- `upstreamAddr` が空かつ config に YP が設定されていない → `-32602`
 
 ---
 
@@ -257,14 +292,14 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 
 | フィールド | 説明 |
 |---|---|
-| `status` | `"Receiving"` (RTMP データ受信中) または `"Idle"` (未受信)。`ContentBuffer.HasData()` に基づく |
-| `source` | `rtmp://127.0.0.1:<rtmpPort>/live/<streamKey>` |
+| `status` | `"Receiving"` (データ受信中) または `"Idle"` (未受信)。`ContentBuffer.HasData()` に基づく |
+| `source` | ブロードキャストチャンネル: `rtmp://127.0.0.1:<rtmpPort>/live/<streamKey>`。リレーチャンネル: 上流ノードの `host:port` |
 | `totalDirects` | HTTP 直接視聴接続数（`Channel.NumListeners()`） |
 | `totalRelays` | PCP リレー接続数（`Channel.NumRelays()`） |
-| `isBroadcasting` | RTMP からデータを受信済みなら `true`（`ContentBuffer.HasData()`） |
+| `isBroadcasting` | ブロードキャストチャンネル (RTMP ソース) なら `true`、リレーチャンネルなら `false` |
 | `isRelayFull` | リレー接続が上限に達していれば `true`（`Channel.IsRelayFull()`）。上限未設定時は常に `false` |
 | `isDirectFull` | 直接視聴接続が上限に達していれば `true`（`Channel.IsDirectFull()`）。上限未設定時は常に `false` |
-| `isReceiving` | RTMP からデータを受信済みなら `true`（`ContentBuffer.HasData()`） |
+| `isReceiving` | ストリームデータを受信済みなら `true`（`ContentBuffer.HasData()`） |
 
 ---
 
@@ -345,7 +380,7 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
 | `status` | ソースは `"Receiving"` または `"Idle"`（`HasData()` に基づく）、出力接続は `"Connected"`（固定値） |
 | `sendRate` | bytes/sec（`OutputStream.SendRate()`）。ソースは常に `0` |
 | `recvRate` | bytes/sec。現実装では常に `0` |
-| `protocolName` | ソースは `"RTMP"`、PCP リレーは `"PCP"`、HTTP 直接は `"HTTP"` |
+| `protocolName` | ブロードキャストチャンネルのソースは `"RTMP"`、リレーチャンネルのソースは `"PCP"`、下流 PCP リレーは `"PCP"`、HTTP 直接は `"HTTP"` |
 | `remoteEndPoint` | `"IP:port"` 文字列 |
 
 ---
@@ -390,9 +425,12 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
 
 **パラメータ:** `[channelId: string]`
 
-自ノード（ブロードキャストノード）のみのツリーを返す。YP からのノード情報収集は未実装のため `children` は常に空配列。
+自ノードのリレーツリーを返す。
 
-**返却値:**
+- **ブロードキャストチャンネル:** 自ノードのみの単一要素配列。`isTracker: true`。`children` は常に空配列（YP 経由のノード情報収集は未実装）。
+- **リレーチャンネル:** 上流ノードをルートとし、その `children` として自ノードを含む 2 段ツリーを返す。
+
+**返却値（ブロードキャストチャンネルの場合）:**
 ```json
 [
   {
@@ -414,7 +452,32 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
 ]
 ```
 
-`address` は空文字列（グローバル IP の取得は YPClient の `oleh.rip` 経由のみであり、API サーバーからは参照不可）。
+**返却値（リレーチャンネルの場合）:**
+```json
+[
+  {
+    "sessionId": "",
+    "address": "192.168.1.10",
+    "port": 7144,
+    "isTracker": false,
+    "isReceiving": true,
+    "children": [
+      {
+        "sessionId": "aabbccdd...",
+        "address": "",
+        "port": 7144,
+        "isTracker": false,
+        "localRelays": 1,
+        "localDirects": 0,
+        "isReceiving": true,
+        "children": []
+      }
+    ]
+  }
+]
+```
+
+`address` は空文字列（グローバル IP の取得は YPClient の `oleh.rip` 経由のみであり、API サーバーからは参照不可）。上流ノードの `sessionId` は未取得のため空文字列。
 
 ---
 
@@ -424,7 +487,9 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
 - 同じストリームキーで放送中に再度 `broadcastChannel` を呼ぶとエラー。`stopChannel` してから再呼び出しする。
 - `broadcastChannel` より先に RTMP push が来ても受け付ける（ストリームキーが発行済みであれば）。チャンネルが作成されるまでの RTMP データは静かにドロップされる。
 - `channelId` の照合は大文字・小文字を区別しない。
-- `getChannelStatus.status` は `"Receiving"` (RTMP データ受信中) または `"Idle"` (未受信)。
-- `getChannelConnections` の `recvRate` は常に `0`（RTMP 受信レートの計測は未実装）。
-- `getYellowPages` の `channelCount` はアクティブなチャンネル数（`Manager.List()` の件数）を返す。
+- `getChannelStatus.status` は `"Receiving"` (データ受信中) または `"Idle"` (未受信)。
+- `getChannelConnections` の `recvRate` は常に `0`（受信レートの計測は未実装）。
+- `getYellowPages` の `channelCount` はアクティブなチャンネル数（`Manager.List()` の件数）を返す。ブロードキャスト・リレー合算。
 - `getChannelRelayTree` の `address` は空文字列（グローバル IP 未取得）。
+- `relayChannel` は返却直後に上流への接続が完了していない場合がある。`getChannelStatus.isReceiving` で確認する。
+- リレーチャンネルでも `bumpChannel` は機能する（YP への bcst が送信される）。
