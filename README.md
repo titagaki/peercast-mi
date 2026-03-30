@@ -2,6 +2,8 @@
 
 RTMP で受け取ったストリームを PCP ネットワークに配信する Go 製 PeerCast。
 
+複数チャンネルを同時に配信できる。チャンネルは起動時ではなく JSON-RPC API で動的に作成する。
+
 ## 必要なもの
 
 - Go 1.22 以上
@@ -20,17 +22,13 @@ go build -o peercast-mm .
 あらかじめ `config.toml` で YP とポートを設定しておく。
 
 ```sh
-./peercast-mm -name "チャンネル名" -genre "ジャンル"
+./peercast-mm
 ```
 
 ### オプション
 
 | フラグ | デフォルト | 説明 |
 |---|---|---|
-| `-name` | **(必須)** | チャンネル名 |
-| `-genre` | — | ジャンル |
-| `-url` | — | コンタクト URL |
-| `-desc` | — | チャンネル説明 |
 | `-yp` | config.toml の先頭エントリ | 使用する YP 名 |
 | `-config` | `config.toml` | 設定ファイルのパス |
 
@@ -57,25 +55,73 @@ addr = "pcp://localhost:7144/"
 ログは標準エラー出力 (stderr) に出力される。ファイルに保存したい場合はリダイレクトする。
 
 ```sh
-./peercast-mm -name "テスト配信" 2>> peercast.log
+./peercast-mm 2>> peercast.log
 ```
 
-`log_level = "debug"` にするとプロトコルの詳細 (YP への bcst 送信、PCP ハンドシェイク、下流ノードからの bcst 受信など) も出力される。
+## チャンネルの作成と配信
 
-### YP を指定して起動する場合
+チャンネルは JSON-RPC API を使って動的に作成する。
+
+### 1. ストリームキーを発行する
 
 ```sh
-./peercast-mm -name "テスト配信" -yp moe
+curl -s -X POST http://localhost:7144/api/1 \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"issueStreamKey","params":[],"id":1}'
 ```
 
-## エンコーダーの設定
+```json
+{"jsonrpc":"2.0","id":1,"result":{"streamKey":"sk_a1b2c3d4e5f6..."}}
+```
 
-peercast-mm が起動したら、エンコーダーから以下の URL に RTMP push する。
+ストリームキーはプロセスが終了するまで有効。チャンネルを止めても失効しない。
 
+### 2. エンコーダーを接続する
+
+OBS Studio の設定:
+
+- **サービス:** カスタム
 - **サーバー:** `rtmp://localhost/live`
-- **ストリームキー:** 任意 (例: `stream`)
+- **ストリームキー:** 手順 1 で取得したキー (`sk_a1b2c3d4e5f6...`)
 
-OBS Studio の場合: 設定 → 配信 → サービス「カスタム」→ サーバーに上記 URL を入力。
+エンコーダーの接続はこの時点で行ってもよいし、手順 3 の後でもよい。
+ストリームキーが発行済みであれば RTMP 接続は受け付けられる。
+
+### 3. チャンネルを開始する
+
+```sh
+curl -s -X POST http://localhost:7144/api/1 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc":"2.0","method":"broadcastChannel","params":[{
+      "sourceUri": "rtmp://127.0.0.1:1935/live/sk_a1b2c3d4e5f6...",
+      "info": {
+        "name":    "テスト配信",
+        "genre":   "ゲーム",
+        "url":     "https://example.com",
+        "desc":    "",
+        "comment": "",
+        "bitrate": 3000
+      },
+      "track": {"title":"","creator":"","album":"","url":""}
+    }],"id":2}'
+```
+
+```json
+{"jsonrpc":"2.0","id":2,"result":{"channelId":"0123456789abcdef0123456789abcdef"}}
+```
+
+同じパラメータで再度呼び出すと同じ `channelId` が返る（決定論的生成）。
+
+### 4. チャンネルを停止する
+
+```sh
+curl -s -X POST http://localhost:7144/api/1 \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"stopChannel","params":["0123456789abcdef0123456789abcdef"],"id":3}'
+```
+
+チャンネルが停止してもストリームキーは残るため、手順 3 から繰り返せる。
 
 ## 視聴・リレー
 
@@ -83,11 +129,28 @@ peercast-mm はポート 7144 で待ち受ける。
 
 | URL | 用途 |
 |---|---|
-| `http://localhost:7144/stream/<channel-id>` | メディアプレイヤーで直接視聴 |
-| `http://localhost:7144/channel/<channel-id>` | PeerCast ノードからのリレー接続 |
+| `http://localhost:7144/stream/<channelId>` | メディアプレイヤーで直接視聴 |
+| `http://localhost:7144/channel/<channelId>` | PeerCast ノードからのリレー接続 |
 
-ChannelID は起動時のログに表示される。
+`channelId` は `broadcastChannel` の返却値、または `getChannels` で確認できる。
 
-```
-time=2026-01-01T00:00:00.000Z level=INFO msg=startup session_id=... broadcast_id=... channel_id=a1b2c3d4e5f6...
-```
+## JSON-RPC API
+
+詳細仕様は [docs/api/jsonrpc.md](docs/api/jsonrpc.md) を参照。
+
+| メソッド | 説明 |
+|---|---|
+| `issueStreamKey` | ストリームキーを発行する |
+| `broadcastChannel` | チャンネルを開始する |
+| `getChannels` | 配信中チャンネルの一覧 |
+| `getChannelInfo` | チャンネル情報を取得 |
+| `getChannelStatus` | チャンネルステータスを取得 |
+| `setChannelInfo` | チャンネル情報を更新 |
+| `stopChannel` | チャンネルを停止 |
+| `bumpChannel` | YP への bcst を即時送信 |
+| `getChannelConnections` | 接続一覧を取得 |
+| `stopChannelConnection` | 特定の接続を切断 |
+| `getYellowPages` | YP 一覧を取得 |
+| `getChannelRelayTree` | リレーツリーを取得 |
+| `getVersionInfo` | エージェント名を取得 |
+| `getSettings` | ポート設定を取得 |

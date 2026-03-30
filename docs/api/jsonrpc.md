@@ -54,6 +54,8 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (
 
 | メソッド | パラメータ | 返却値 |
 |---|---|---|
+| `issueStreamKey` | なし | `{ streamKey }` |
+| `broadcastChannel` | `[{ sourceUri, info, track }]` | `{ channelId }` |
 | `getVersionInfo` | なし | `{ agentName }` |
 | `getSettings` | なし | `{ serverPort, rtmpPort }` |
 | `getChannels` | なし | チャンネルオブジェクトの配列 |
@@ -72,6 +74,68 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (
 ---
 
 ## 各メソッドの仕様
+
+### `issueStreamKey`
+
+**パラメータ:** なし
+
+RTMP エンコーダーが使用するストリームキーを新規発行する。
+
+**返却値:**
+```json
+{ "streamKey": "sk_a1b2c3d4e5f6789012345678abcdef01" }
+```
+
+ストリームキーはプロセスが終了するまで有効。`stopChannel` でチャンネルを止めても失効しない。
+
+---
+
+### `broadcastChannel`
+
+**パラメータ:** `[{ sourceUri, info, track }]`
+
+指定したストリームキーでチャンネルを開始する。
+
+```json
+[{
+  "sourceUri": "rtmp://127.0.0.1:1935/live/sk_a1b2c3d4e5f6...",
+  "info": {
+    "name":    "チャンネル名",
+    "genre":   "ジャンル",
+    "url":     "https://example.com",
+    "desc":    "説明",
+    "comment": "",
+    "bitrate": 3000
+  },
+  "track": {
+    "title":   "",
+    "creator": "",
+    "album":   "",
+    "url":     ""
+  }
+}]
+```
+
+| フィールド | 説明 |
+|---|---|
+| `sourceUri` | RTMP ソース URI。`/live/<streamKey>` の形式でストリームキーを含める |
+| `info.name` | チャンネル名 (**必須**、空文字列不可) |
+| `info.bitrate` | ビットレート (kbps)。`0` でもよい (RTMP の onMetaData で上書きされる) |
+
+**返却値:**
+```json
+{ "channelId": "0123456789abcdef0123456789abcdef" }
+```
+
+ChannelID は入力パラメータから決定論的に生成される。同じ `sourceUri` と `info` で再呼び出しすると同じ `channelId` が返る。
+
+**エラー条件:**
+- `info.name` が空 → `-32602`
+- `sourceUri` に `/live/<streamKey>` 形式がない → `-32602`
+- ストリームキーが未発行 (`issueStreamKey` を呼んでいない) → `-32602`
+- そのストリームキーで既に放送中 (`stopChannel` してから再呼び出しする) → `-32602`
+
+---
 
 ### `getVersionInfo`
 
@@ -101,7 +165,7 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 
 **パラメータ:** なし
 
-**返却値:** チャンネルオブジェクトの配列。peercast-mm は常にチャンネルが 1 本なので要素数は 1。
+**返却値:** チャンネルオブジェクトの配列。`broadcastChannel` で開始中のチャンネルが全て含まれる。
 
 ```json
 [
@@ -109,7 +173,7 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
     "channelId": "0123456789abcdef0123456789abcdef",
     "status": {
       "status": "Receiving",
-      "source": "rtmp://127.0.0.1:1935/live",
+      "source": "rtmp://127.0.0.1:1935/live/sk_a1b2c3...",
       "totalDirects": 1,
       "totalRelays": 2,
       "isBroadcasting": true,
@@ -181,7 +245,7 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 ```json
 {
   "status": "Receiving",
-  "source": "rtmp://127.0.0.1:1935/live",
+  "source": "rtmp://127.0.0.1:1935/live/sk_a1b2c3...",
   "totalDirects": 1,
   "totalRelays": 2,
   "isBroadcasting": true,
@@ -194,7 +258,7 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 | フィールド | 説明 |
 |---|---|
 | `status` | 常に `"Receiving"`（固定値） |
-| `source` | `rtmp://127.0.0.1:<rtmpPort>/live`（固定値） |
+| `source` | `rtmp://127.0.0.1:<rtmpPort>/live/<streamKey>` |
 | `totalDirects` | HTTP 直接視聴接続数（`Channel.NumListeners()`） |
 | `totalRelays` | PCP リレー接続数（`Channel.NumRelays()`） |
 | `isBroadcasting` | 常に `true`（固定値） |
@@ -356,8 +420,11 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
 
 ## 実装上の制約・注意事項
 
-- peercast-mm は常に 1 チャンネルのみ管理する。`getChannels` は常に 1 要素の配列を返す。
-- `channelId` の照合は大文字・小文字を区別しない（`strings.EqualFold`）。
-- `getChannelStatus.status` は現在 `"Receiving"` 固定。RTMP 未接続時も同じ値を返す（`isReceiving: false` で区別すること）。
+- ストリームキーはメモリ上にのみ保持される。プロセス再起動で失効する。
+- 同じストリームキーで放送中に再度 `broadcastChannel` を呼ぶとエラー。`stopChannel` してから再呼び出しする。
+- `broadcastChannel` より先に RTMP push が来ても受け付ける（ストリームキーが発行済みであれば）。チャンネルが作成されるまでの RTMP データは静かにドロップされる。
+- `channelId` の照合は大文字・小文字を区別しない。
+- `getChannelStatus.status` は現在 `"Receiving"` 固定。RTMP 未受信時は `isReceiving: false` で区別する。
 - `getChannelConnections` の `recvRate` は常に `0`（RTMP 受信レートの計測は未実装）。
+- `getYellowPages` の `channelCount` はアクティブなチャンネル数（`Manager.List()` の件数）を返す。
 - `getChannelRelayTree` の `address` は空文字列（グローバル IP 未取得）。

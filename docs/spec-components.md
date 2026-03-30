@@ -14,8 +14,22 @@
 
 - ポート 1935 で TCP 待ち受け
 - RTMP ハンドシェイク処理 (go-rtmp に委譲)
+- `OnPublish` でストリームキーを検証し、未発行キーの接続を拒否
 - FLV タグ (Video / Audio / ScriptData) のストリームへの変換
 - チャンネルメタデータ (`onMetaData`) からの `ChannelInfo` 更新
+
+### ストリームキー認証
+
+`OnPublish(cmd *message.NetStreamPublish)` コールバックで認証を行う。
+
+```
+cmd.PublishingName = "sk_a1b2c3..."  ← OBS の「ストリームキー」欄
+```
+
+- `Manager.IsIssuedKey(key)` が `false` → エラーを返して接続拒否
+- `true` → 接続を受け付け、`handler.streamKey` に記録
+
+`broadcastChannel` が呼ばれるまでの間、データは `Manager.GetByStreamKey()` が `nil` を返すため静かにドロップされる。
 
 ### FLV タグ形式
 
