@@ -19,20 +19,10 @@ import (
 func main() {
 	configPath := flag.String("config", "config.toml", "Path to config file")
 	ypName := flag.String("yp", "", "YP name to use (default: first entry in config)")
-	chanName := flag.String("name", "", "Channel name (required)")
-	chanGenre := flag.String("genre", "", "Channel genre")
-	chanURL := flag.String("url", "", "Channel contact URL")
-	chanDesc := flag.String("desc", "", "Channel description")
-	chanBitrate := flag.Uint("bitrate", 0, "Channel bitrate (kbps)")
 	flag.Parse()
 
 	// Minimal logger before config is loaded (errors only).
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
-
-	if *chanName == "" {
-		slog.Error("-name is required")
-		os.Exit(1)
-	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -44,24 +34,13 @@ func main() {
 
 	sessionID := id.NewRandom()
 	broadcastID := id.NewRandom()
-	channelID := id.ChannelID(broadcastID, *chanName, *chanGenre, uint32(*chanBitrate))
 
-	slog.Info("startup", "session_id", sessionID, "broadcast_id", broadcastID, "channel_id", channelID)
+	slog.Info("startup", "session_id", sessionID, "broadcast_id", broadcastID)
 
-	ch := channel.New(channelID, broadcastID)
-	ch.SetInfo(channel.ChannelInfo{
-		Name:     *chanName,
-		Genre:    *chanGenre,
-		URL:      *chanURL,
-		Desc:     *chanDesc,
-		Bitrate:  uint32(*chanBitrate),
-		Type:     "FLV",
-		MIMEType: "video/x-flv",
-		Ext:      ".flv",
-	})
+	mgr := channel.NewManager(broadcastID)
 
 	// Start OutputListener.
-	listener := servent.NewListener(sessionID, ch, cfg.PeercastPort, cfg.MaxRelays, cfg.MaxListeners)
+	listener := servent.NewListener(sessionID, mgr, cfg.PeercastPort, cfg.MaxRelays, cfg.MaxListeners)
 	go func() {
 		slog.Info("output: listening", "port", cfg.PeercastPort)
 		if err := listener.ListenAndServe(); err != nil {
@@ -82,7 +61,7 @@ func main() {
 			slog.Error("yp: invalid addr", "addr", ypEntry.Addr, "err", err)
 			os.Exit(1)
 		}
-		ypClient := yp.New(hostPort, sessionID, broadcastID, ch)
+		ypClient := yp.New(hostPort, sessionID, broadcastID, mgr)
 		ypClientForAPI = ypClient
 		go func() {
 			slog.Info("yp: connecting", "addr", ypEntry.Addr, "name", ypEntry.Name)
@@ -92,12 +71,12 @@ func main() {
 	}
 
 	// Wire JSON-RPC API handler into the listener.
-	apiServer := jsonrpc.New(sessionID, ch, cfg, ypClientForAPI)
+	apiServer := jsonrpc.New(sessionID, mgr, cfg, ypClientForAPI)
 	listener.SetAPIHandler(apiServer.Handler())
 	slog.Info("api: JSON-RPC ready", "port", cfg.PeercastPort)
 
 	// Start RTMP server.
-	rtmpServer := rtmp.NewServer(ch, cfg.RTMPPort)
+	rtmpServer := rtmp.NewServer(mgr, cfg.RTMPPort)
 	go func() {
 		slog.Info("rtmp: listening", "port", cfg.RTMPPort)
 		if err := rtmpServer.ListenAndServe(); err != nil {
@@ -113,5 +92,5 @@ func main() {
 	slog.Info("shutting down")
 	rtmpServer.Close()
 	listener.Close()
-	ch.CloseAll()
+	mgr.StopAll()
 }

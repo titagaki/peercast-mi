@@ -21,13 +21,16 @@ type Server struct {
 	port int
 }
 
-// NewServer creates an RTMPServer that feeds data into the given channel.
-func NewServer(ch *channel.Channel, port int) *Server {
+// NewServer creates an RTMP server that feeds incoming streams into channels
+// managed by mgr. Each encoder connection must publish with a stream key that
+// was previously issued via mgr.IssueStreamKey(); otherwise the connection is
+// rejected in OnPublish.
+func NewServer(mgr *channel.Manager, port int) *Server {
 	s := &Server{port: port}
 	s.srv = gortmp.NewServer(&gortmp.ServerConfig{
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *gortmp.ConnConfig) {
 			slog.Info("rtmp: encoder connected", "remote", conn.RemoteAddr())
-			h := newHandler(ch, conn.RemoteAddr().String())
+			h := newHandler(mgr, conn.RemoteAddr().String())
 			return conn, &gortmp.ConnConfig{Handler: h}
 		},
 	})
@@ -54,8 +57,9 @@ func (s *Server) Close() {
 
 type handler struct {
 	gortmp.DefaultHandler
-	ch         *channel.Channel
+	mgr        *channel.Manager
 	remoteAddr string
+	streamKey  string // set in OnPublish; empty until then
 
 	// Accumulated sequence headers and metadata.
 	metaTag    []byte // onMetaData FLV tag (timestamp zeroed)
@@ -66,8 +70,33 @@ type handler struct {
 	streamPos uint32 // running byte position counter
 }
 
-func newHandler(ch *channel.Channel, remoteAddr string) *handler {
-	return &handler{ch: ch, remoteAddr: remoteAddr}
+func newHandler(mgr *channel.Manager, remoteAddr string) *handler {
+	return &handler{mgr: mgr, remoteAddr: remoteAddr}
+}
+
+// ch returns the active channel for this connection's stream key, or nil if
+// OnPublish has not been called yet or broadcastChannel has not been called.
+// Data received before broadcastChannel is called is silently dropped.
+func (h *handler) ch() *channel.Channel {
+	if h.streamKey == "" {
+		return nil
+	}
+	ch, _ := h.mgr.GetByStreamKey(h.streamKey)
+	return ch
+}
+
+// OnPublish validates the publishing stream key against the manager's issued
+// keys. Returns an error (causing go-rtmp to reject the stream) if the key is
+// unknown.
+func (h *handler) OnPublish(_ *gortmp.StreamContext, _ uint32, cmd *message.NetStreamPublish) error {
+	key := cmd.PublishingName
+	if !h.mgr.IsIssuedKey(key) {
+		slog.Warn("rtmp: rejected unknown stream key", "remote", h.remoteAddr, "key", key)
+		return fmt.Errorf("rtmp: stream key %q not issued", key)
+	}
+	h.streamKey = key
+	slog.Info("rtmp: stream key accepted", "remote", h.remoteAddr, "key", key)
+	return nil
 }
 
 // OnSetDataFrame handles the onMetaData AMF0 script tag.
@@ -131,9 +160,14 @@ func (h *handler) OnClose() {
 }
 
 // rebuildHeader assembles the FLV head packet from accumulated sequence headers
-// and calls SetHeader on the channel if all required parts are present.
+// and calls SetHeader on the channel. Silently dropped if no active channel
+// exists for the stream key yet (broadcastChannel not yet called).
 func (h *handler) rebuildHeader() {
 	if h.avcTag == nil && h.aacTag == nil {
+		return
+	}
+	ch := h.ch()
+	if ch == nil {
 		return
 	}
 
@@ -156,17 +190,21 @@ func (h *handler) rebuildHeader() {
 		head = appendFLVTagWithBackPointer(head, h.aacTag)
 	}
 
-	h.ch.SetHeader(head)
+	ch.SetHeader(head)
 	if !h.headerSent {
 		h.headerSent = true
-		slog.Info("rtmp: stream started", "remote", h.remoteAddr)
+		slog.Info("rtmp: stream started", "remote", h.remoteAddr, "key", h.streamKey)
 	}
 }
 
 func (h *handler) writeData(tag []byte, cont bool) {
+	ch := h.ch()
+	if ch == nil {
+		return
+	}
 	pos := h.streamPos
 	h.streamPos += uint32(len(tag))
-	h.ch.Write(tag, pos, cont)
+	ch.Write(tag, pos, cont)
 }
 
 // ---------------------------------------------------------------------------
@@ -212,8 +250,12 @@ func appendFLVTagWithBackPointer(buf, tag []byte) []byte {
 // ---------------------------------------------------------------------------
 
 // maybeUpdateInfo extracts bitrate from onMetaData payload and updates the channel.
-// data.Payload contains the raw AMF0 bytes: "onMetaData" string + object.
+// Silently dropped if no active channel exists for the stream key yet.
 func (h *handler) maybeUpdateInfo(data *message.NetStreamSetDataFrame) {
+	ch := h.ch()
+	if ch == nil {
+		return
+	}
 	dec := goamf0.NewDecoder(bytes.NewReader(data.Payload))
 
 	// Skip the "onMetaData" string.
@@ -237,7 +279,7 @@ func (h *handler) maybeUpdateInfo(data *message.NetStreamSetDataFrame) {
 		}
 	}
 
-	info := h.ch.Info()
+	info := ch.Info()
 
 	if v, ok := m["videodatarate"]; ok {
 		if f, ok := v.(float64); ok {
@@ -255,5 +297,5 @@ func (h *handler) maybeUpdateInfo(data *message.NetStreamSetDataFrame) {
 		info.Ext = ".flv"
 	}
 
-	h.ch.SetInfo(info)
+	ch.SetInfo(info)
 }

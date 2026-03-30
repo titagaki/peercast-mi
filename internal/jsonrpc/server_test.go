@@ -22,25 +22,27 @@ import (
 
 func newTestServer(t *testing.T) (*Server, *channel.Channel, pcp.GnuID) {
 	t.Helper()
-	var sid, chID, bcID pcp.GnuID
+	var sid, broadcastID pcp.GnuID
 	for i := range sid {
 		sid[i] = byte(0xAA)
 	}
-	for i := range chID {
-		chID[i] = byte(i)
+	for i := range broadcastID {
+		broadcastID[i] = byte(0xBB)
 	}
-	for i := range bcID {
-		bcID[i] = byte(0xBB)
-	}
-	ch := channel.New(chID, bcID)
-	ch.SetInfo(channel.ChannelInfo{
+	mgr := channel.NewManager(broadcastID)
+	streamKey := mgr.IssueStreamKey()
+	info := channel.ChannelInfo{
 		Name:    "テストチャンネル",
 		URL:     "https://example.com",
 		Desc:    "説明",
 		Genre:   "テスト",
 		Type:    "FLV",
 		Bitrate: 500,
-	})
+	}
+	ch, err := mgr.Broadcast(streamKey, info, channel.TrackInfo{})
+	if err != nil {
+		t.Fatalf("Broadcast: %v", err)
+	}
 	cfg := &config.Config{
 		RTMPPort:     1935,
 		PeercastPort: 7144,
@@ -48,8 +50,8 @@ func newTestServer(t *testing.T) (*Server, *channel.Channel, pcp.GnuID) {
 			{Name: "TestYP", Addr: "yp.example.com:7144"},
 		},
 	}
-	s := New(sid, ch, cfg, nil)
-	return s, ch, chID
+	s := New(sid, mgr, cfg, nil)
+	return s, ch, ch.ID
 }
 
 func chanIDHex(id pcp.GnuID) string {
@@ -291,8 +293,10 @@ func TestGetChannelStatus(t *testing.T) {
 	if result["status"] != "Receiving" {
 		t.Fatalf("unexpected status: %v", result["status"])
 	}
-	if result["source"] != "rtmp://127.0.0.1:1935/live" {
-		t.Fatalf("unexpected source: %v", result["source"])
+	// source includes the stream key: rtmp://127.0.0.1:1935/live/<streamKey>
+	src, _ := result["source"].(string)
+	if !strings.HasPrefix(src, "rtmp://127.0.0.1:1935/live/sk_") {
+		t.Fatalf("unexpected source: %v", src)
 	}
 	if !result["isBroadcasting"].(bool) {
 		t.Fatal("isBroadcasting should be true")
@@ -551,15 +555,14 @@ func TestGetYellowPages_NoYPClient(t *testing.T) {
 }
 
 func TestGetYellowPages_AddrWithScheme(t *testing.T) {
-	var sid pcp.GnuID
-	var chID, bcID pcp.GnuID
-	ch := channel.New(chID, bcID)
+	var sid, broadcastID pcp.GnuID
+	mgr := channel.NewManager(broadcastID)
 	cfg := &config.Config{
 		RTMPPort:     1935,
 		PeercastPort: 7144,
 		YPs:          []config.YP{{Name: "YP2", Addr: "pcp://yp.example.com/"}},
 	}
-	s := New(sid, ch, cfg, nil)
+	s := New(sid, mgr, cfg, nil)
 	resp := rpcCall(t, s, "getYellowPages", nil)
 	result := assertResult(t, resp).([]interface{})
 	yp := result[0].(map[string]interface{})
@@ -569,11 +572,10 @@ func TestGetYellowPages_AddrWithScheme(t *testing.T) {
 }
 
 func TestGetYellowPages_Empty(t *testing.T) {
-	var sid pcp.GnuID
-	var chID, bcID pcp.GnuID
-	ch := channel.New(chID, bcID)
+	var sid, broadcastID pcp.GnuID
+	mgr := channel.NewManager(broadcastID)
 	cfg := &config.Config{RTMPPort: 1935, PeercastPort: 7144}
-	s := New(sid, ch, cfg, nil)
+	s := New(sid, mgr, cfg, nil)
 	resp := rpcCall(t, s, "getYellowPages", nil)
 	result := assertResult(t, resp).([]interface{})
 	if len(result) != 0 {

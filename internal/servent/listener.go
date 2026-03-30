@@ -3,6 +3,7 @@ package servent
 import (
 	"bufio"
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,7 +21,7 @@ import (
 // to the appropriate output stream handler.
 type Listener struct {
 	sessionID    pcp.GnuID
-	ch           *channel.Channel
+	mgr          *channel.Manager
 	port         int
 	maxRelays    int // 0 = unlimited
 	maxListeners int // 0 = unlimited
@@ -31,10 +32,10 @@ type Listener struct {
 
 // NewListener creates a new Listener.
 // maxRelays and maxListeners set the per-channel connection limits (0 = unlimited).
-func NewListener(sessionID pcp.GnuID, ch *channel.Channel, port, maxRelays, maxListeners int) *Listener {
+func NewListener(sessionID pcp.GnuID, mgr *channel.Manager, port, maxRelays, maxListeners int) *Listener {
 	return &Listener{
 		sessionID:    sessionID,
-		ch:           ch,
+		mgr:          mgr,
 		port:         port,
 		maxRelays:    maxRelays,
 		maxListeners: maxListeners,
@@ -75,8 +76,9 @@ func (l *Listener) handle(conn net.Conn) {
 	cc := newCountingConn(conn)
 	br := bufio.NewReader(conn)
 
-	// Peek up to 16 bytes to identify the protocol.
-	peek, err := br.Peek(16)
+	// Peek enough bytes to identify the protocol and extract a 32-hex channel ID.
+	// "GET /channel/<32-hex>" = 13 + 32 = 45 chars; 64 bytes is sufficient.
+	peek, err := br.Peek(64)
 	if err != nil && len(peek) < 4 {
 		conn.Close()
 		return
@@ -84,28 +86,52 @@ func (l *Listener) handle(conn net.Conn) {
 
 	switch {
 	case startsWith(peek, "GET /channel/"):
+		channelID, ok := parseChannelIDFromPath(peek, "/channel/")
+		if !ok {
+			slog.Warn("pcp: bad channel path", "remote", conn.RemoteAddr())
+			conn.Close()
+			return
+		}
+		ch, ok := l.mgr.GetByID(channelID)
+		if !ok {
+			slog.Info("pcp: channel not found", "remote", conn.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
+			conn.Close()
+			return
+		}
 		id := int(l.nextConnID.Add(1))
-		h := newPCPOutputStream(cc, br, l.sessionID, l.ch, id)
-		if !l.ch.TryAddOutput(h, l.maxRelays, l.maxListeners) {
+		h := newPCPOutputStream(cc, br, l.sessionID, ch, id)
+		if !ch.TryAddOutput(h, l.maxRelays, l.maxListeners) {
 			slog.Info("pcp: relay rejected (relay full)", "remote", conn.RemoteAddr())
 			conn.Close()
 			return
 		}
 		slog.Info("pcp: relay connected", "remote", conn.RemoteAddr(), "id", id)
 		h.run()
-		l.ch.RemoveOutput(h)
+		ch.RemoveOutput(h)
 
 	case startsWith(peek, "GET /stream/"):
+		channelID, ok := parseChannelIDFromPath(peek, "/stream/")
+		if !ok {
+			slog.Warn("http: bad stream path", "remote", conn.RemoteAddr())
+			conn.Close()
+			return
+		}
+		ch, ok := l.mgr.GetByID(channelID)
+		if !ok {
+			slog.Info("http: channel not found", "remote", conn.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
+			conn.Close()
+			return
+		}
 		id := int(l.nextConnID.Add(1))
-		h := newHTTPOutputStream(cc, br, l.ch, id)
-		if !l.ch.TryAddOutput(h, l.maxRelays, l.maxListeners) {
+		h := newHTTPOutputStream(cc, br, ch, id)
+		if !ch.TryAddOutput(h, l.maxRelays, l.maxListeners) {
 			slog.Info("http: viewer rejected (direct full)", "remote", conn.RemoteAddr())
 			conn.Close()
 			return
 		}
 		slog.Info("http: viewer connected", "remote", conn.RemoteAddr(), "id", id)
 		h.run()
-		l.ch.RemoveOutput(h)
+		ch.RemoveOutput(h)
 
 	case startsWith(peek, "pcp\n"):
 		slog.Debug("servent: ping", "remote", conn.RemoteAddr())
@@ -134,6 +160,38 @@ func startsWith(data []byte, prefix string) bool {
 		}
 	}
 	return true
+}
+
+// parseChannelIDFromPath extracts a 32-hex-char channel ID from the peeked
+// bytes. pathPrefix is the URL path segment before the ID (e.g. "/channel/").
+// The peek slice starts with "GET ".
+func parseChannelIDFromPath(peek []byte, pathPrefix string) (pcp.GnuID, bool) {
+	s := string(peek)
+	idx := indexString(s, pathPrefix)
+	if idx < 0 {
+		return pcp.GnuID{}, false
+	}
+	start := idx + len(pathPrefix)
+	if start+32 > len(s) {
+		return pcp.GnuID{}, false
+	}
+	hexStr := s[start : start+32]
+	b, err := hex.DecodeString(hexStr)
+	if err != nil || len(b) != 16 {
+		return pcp.GnuID{}, false
+	}
+	var id pcp.GnuID
+	copy(id[:], b)
+	return id, true
+}
+
+func indexString(s, sub string) int {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 // handleAPIRequest handles a JSON-RPC request forwarded from the listener.

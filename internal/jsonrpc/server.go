@@ -18,16 +18,16 @@ import (
 // Server handles JSON-RPC 2.0 requests at POST /api/1.
 type Server struct {
 	sessionID pcp.GnuID
-	ch        *channel.Channel
+	mgr       *channel.Manager
 	cfg       *config.Config
 	ypClient  *yp.Client // may be nil
 }
 
 // New creates a new JSON-RPC Server.
-func New(sessionID pcp.GnuID, ch *channel.Channel, cfg *config.Config, ypClient *yp.Client) *Server {
+func New(sessionID pcp.GnuID, mgr *channel.Manager, cfg *config.Config, ypClient *yp.Client) *Server {
 	return &Server{
 		sessionID: sessionID,
-		ch:        ch,
+		mgr:       mgr,
 		cfg:       cfg,
 		ypClient:  ypClient,
 	}
@@ -105,34 +105,38 @@ func (s *Server) dispatch(method string, params json.RawMessage) (interface{}, *
 		return s.getVersionInfo()
 	case "getSettings":
 		return s.getSettings()
+	case "issueStreamKey":
+		return s.issueStreamKey()
+	case "broadcastChannel":
+		return s.broadcastChannel(params)
 	case "getChannels":
 		return s.getChannels()
 	case "getChannelInfo":
-		return s.withChannelID(params, s.getChannelInfo)
+		return s.withChannel(params, s.getChannelInfo)
 	case "getChannelStatus":
-		return s.withChannelID(params, s.getChannelStatus)
+		return s.withChannel(params, s.getChannelStatus)
 	case "setChannelInfo":
 		return s.setChannelInfo(params)
 	case "stopChannel":
-		return s.withChannelID(params, s.stopChannel)
+		return s.withChannel(params, s.stopChannel)
 	case "bumpChannel":
-		return s.withChannelID(params, s.bumpChannel)
+		return s.withChannel(params, s.bumpChannel)
 	case "getChannelConnections":
-		return s.withChannelID(params, s.getChannelConnections)
+		return s.withChannel(params, s.getChannelConnections)
 	case "stopChannelConnection":
 		return s.stopChannelConnection(params)
 	case "getYellowPages":
 		return s.getYellowPages()
 	case "getChannelRelayTree":
-		return s.withChannelID(params, s.getChannelRelayTree)
+		return s.withChannel(params, s.getChannelRelayTree)
 	default:
 		return nil, &rpcError{Code: errCodeMethodNotFound, Message: fmt.Sprintf("method not found: %s", method)}
 	}
 }
 
-// withChannelID parses the first positional param as a channel ID and verifies
-// it matches the active channel, then calls fn.
-func (s *Server) withChannelID(params json.RawMessage, fn func() (interface{}, *rpcError)) (interface{}, *rpcError) {
+// withChannel parses the first positional param as a channel ID, looks up the
+// active channel in the manager, then calls fn with it.
+func (s *Server) withChannel(params json.RawMessage, fn func(*channel.Channel) (interface{}, *rpcError)) (interface{}, *rpcError) {
 	var args []json.RawMessage
 	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: "channelId required"}
@@ -141,15 +145,21 @@ func (s *Server) withChannelID(params json.RawMessage, fn func() (interface{}, *
 	if err := json.Unmarshal(args[0], &chanIDStr); err != nil {
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: "invalid channelId"}
 	}
-	if !s.matchChannelID(chanIDStr) {
+	ch, ok := s.lookupChannel(chanIDStr)
+	if !ok {
 		return nil, &rpcError{Code: errCodeInternal, Message: "channel not found"}
 	}
-	return fn()
+	return fn(ch)
 }
 
-func (s *Server) matchChannelID(chanIDStr string) bool {
-	expected := hex.EncodeToString(s.ch.ID[:])
-	return strings.EqualFold(chanIDStr, expected)
+func (s *Server) lookupChannel(chanIDStr string) (*channel.Channel, bool) {
+	b, err := hex.DecodeString(chanIDStr)
+	if err != nil || len(b) != 16 {
+		return nil, false
+	}
+	var id pcp.GnuID
+	copy(id[:], b)
+	return s.mgr.GetByID(id)
 }
 
 func gnuIDString(id pcp.GnuID) string {
@@ -169,6 +179,98 @@ func (s *Server) getSettings() (interface{}, *rpcError) {
 		"serverPort": s.cfg.PeercastPort,
 		"rtmpPort":   s.cfg.RTMPPort,
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Method: issueStreamKey
+// ---------------------------------------------------------------------------
+
+func (s *Server) issueStreamKey() (interface{}, *rpcError) {
+	key := s.mgr.IssueStreamKey()
+	return map[string]string{"streamKey": key}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Method: broadcastChannel
+// ---------------------------------------------------------------------------
+
+type broadcastChannelParam struct {
+	SourceURI string      `json:"sourceUri"`
+	Info      chanInfoArg `json:"info"`
+	Track     trackInfoArg `json:"track"`
+}
+
+type chanInfoArg struct {
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Genre   string `json:"genre"`
+	Desc    string `json:"desc"`
+	Comment string `json:"comment"`
+	Bitrate uint32 `json:"bitrate"`
+}
+
+type trackInfoArg struct {
+	Title   string `json:"title"`
+	Creator string `json:"creator"`
+	URL     string `json:"url"`
+	Album   string `json:"album"`
+}
+
+func (s *Server) broadcastChannel(params json.RawMessage) (interface{}, *rpcError) {
+	var args []broadcastChannelParam
+	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "expected [{sourceUri, info, track}]"}
+	}
+	p := args[0]
+
+	if p.Info.Name == "" {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "channel name must not be empty"}
+	}
+
+	streamKey, err := extractStreamKey(p.SourceURI)
+	if err != nil {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: err.Error()}
+	}
+
+	info := channel.ChannelInfo{
+		Name:     p.Info.Name,
+		URL:      p.Info.URL,
+		Genre:    p.Info.Genre,
+		Desc:     p.Info.Desc,
+		Comment:  p.Info.Comment,
+		Bitrate:  p.Info.Bitrate,
+		Type:     "FLV",
+		MIMEType: "video/x-flv",
+		Ext:      ".flv",
+	}
+	track := channel.TrackInfo{
+		Title:   p.Track.Title,
+		Creator: p.Track.Creator,
+		URL:     p.Track.URL,
+		Album:   p.Track.Album,
+	}
+
+	ch, err := s.mgr.Broadcast(streamKey, info, track)
+	if err != nil {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: err.Error()}
+	}
+
+	return map[string]string{"channelId": gnuIDString(ch.ID)}, nil
+}
+
+// extractStreamKey parses the stream key from an RTMP source URI of the form
+// rtmp://host:port/live/<streamKey>.
+func extractStreamKey(sourceURI string) (string, error) {
+	const prefix = "/live/"
+	idx := strings.LastIndex(sourceURI, prefix)
+	if idx < 0 {
+		return "", fmt.Errorf("sourceUri must contain /live/<streamKey>")
+	}
+	key := sourceURI[idx+len(prefix):]
+	if key == "" {
+		return "", fmt.Errorf("stream key is empty in sourceUri")
+	}
+	return key, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -212,8 +314,8 @@ type chanStatusResult struct {
 // Builders
 // ---------------------------------------------------------------------------
 
-func (s *Server) buildChanInfo() chanInfoResult {
-	info := s.ch.Info()
+func (s *Server) buildChanInfo(ch *channel.Channel) chanInfoResult {
+	info := ch.Info()
 	return chanInfoResult{
 		Name:    info.Name,
 		URL:     info.URL,
@@ -225,8 +327,8 @@ func (s *Server) buildChanInfo() chanInfoResult {
 	}
 }
 
-func (s *Server) buildTrackInfo() trackInfoResult {
-	track := s.ch.Track()
+func (s *Server) buildTrackInfo(ch *channel.Channel) trackInfoResult {
+	track := ch.Track()
 	return trackInfoResult{
 		Title:   track.Title,
 		Creator: track.Creator,
@@ -243,16 +345,20 @@ func (s *Server) buildYPRefs() []ypRef {
 	return refs
 }
 
-func (s *Server) buildStatus() chanStatusResult {
+func (s *Server) buildStatus(ch *channel.Channel) chanStatusResult {
+	source := fmt.Sprintf("rtmp://127.0.0.1:%d/live", s.cfg.RTMPPort)
+	if key, ok := s.mgr.StreamKeyByID(ch.ID); ok {
+		source = fmt.Sprintf("rtmp://127.0.0.1:%d/live/%s", s.cfg.RTMPPort, key)
+	}
 	return chanStatusResult{
 		Status:         "Receiving",
-		Source:         fmt.Sprintf("rtmp://127.0.0.1:%d/live", s.cfg.RTMPPort),
-		TotalDirects:   s.ch.NumListeners(),
-		TotalRelays:    s.ch.NumRelays(),
+		Source:         source,
+		TotalDirects:   ch.NumListeners(),
+		TotalRelays:    ch.NumRelays(),
 		IsBroadcasting: true,
-		IsRelayFull:    s.ch.IsRelayFull(s.cfg.MaxRelays),
-		IsDirectFull:   s.ch.IsDirectFull(s.cfg.MaxListeners),
-		IsReceiving:    s.ch.Buffer.HasData(),
+		IsRelayFull:    ch.IsRelayFull(s.cfg.MaxRelays),
+		IsDirectFull:   ch.IsDirectFull(s.cfg.MaxListeners),
+		IsReceiving:    ch.Buffer.HasData(),
 	}
 }
 
@@ -268,31 +374,35 @@ func (s *Server) getChannels() (interface{}, *rpcError) {
 		Track       trackInfoResult  `json:"track"`
 		YellowPages []ypRef          `json:"yellowPages"`
 	}
-	entry := chanEntry{
-		ChannelID:   gnuIDString(s.ch.ID),
-		Status:      s.buildStatus(),
-		Info:        s.buildChanInfo(),
-		Track:       s.buildTrackInfo(),
-		YellowPages: s.buildYPRefs(),
+	channels := s.mgr.List()
+	entries := make([]chanEntry, len(channels))
+	for i, ch := range channels {
+		entries[i] = chanEntry{
+			ChannelID:   gnuIDString(ch.ID),
+			Status:      s.buildStatus(ch),
+			Info:        s.buildChanInfo(ch),
+			Track:       s.buildTrackInfo(ch),
+			YellowPages: s.buildYPRefs(),
+		}
 	}
-	return []chanEntry{entry}, nil
+	return entries, nil
 }
 
-func (s *Server) getChannelInfo() (interface{}, *rpcError) {
+func (s *Server) getChannelInfo(ch *channel.Channel) (interface{}, *rpcError) {
 	type result struct {
 		Info        chanInfoResult  `json:"info"`
 		Track       trackInfoResult `json:"track"`
 		YellowPages []ypRef         `json:"yellowPages"`
 	}
 	return result{
-		Info:        s.buildChanInfo(),
-		Track:       s.buildTrackInfo(),
+		Info:        s.buildChanInfo(ch),
+		Track:       s.buildTrackInfo(ch),
 		YellowPages: s.buildYPRefs(),
 	}, nil
 }
 
-func (s *Server) getChannelStatus() (interface{}, *rpcError) {
-	return s.buildStatus(), nil
+func (s *Server) getChannelStatus(ch *channel.Channel) (interface{}, *rpcError) {
+	return s.buildStatus(ch), nil
 }
 
 func (s *Server) setChannelInfo(params json.RawMessage) (interface{}, *rpcError) {
@@ -304,20 +414,21 @@ func (s *Server) setChannelInfo(params json.RawMessage) (interface{}, *rpcError)
 	if err := json.Unmarshal(args[0], &chanIDStr); err != nil {
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: "invalid channelId"}
 	}
-	if !s.matchChannelID(chanIDStr) {
+	ch, ok := s.lookupChannel(chanIDStr)
+	if !ok {
 		return nil, &rpcError{Code: errCodeInternal, Message: "channel not found"}
 	}
 
-	var infoArg chanInfoResult
+	var infoArg chanInfoArg
 	if err := json.Unmarshal(args[1], &infoArg); err != nil {
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: "invalid info"}
 	}
-	var trackArg trackInfoResult
+	var trackArg trackInfoArg
 	if err := json.Unmarshal(args[2], &trackArg); err != nil {
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: "invalid track"}
 	}
 
-	cur := s.ch.Info()
+	cur := ch.Info()
 	cur.Name = infoArg.Name
 	cur.URL = infoArg.URL
 	cur.Desc = infoArg.Desc
@@ -326,9 +437,9 @@ func (s *Server) setChannelInfo(params json.RawMessage) (interface{}, *rpcError)
 	if infoArg.Bitrate > 0 {
 		cur.Bitrate = infoArg.Bitrate
 	}
-	s.ch.SetInfo(cur)
+	ch.SetInfo(cur)
 
-	s.ch.SetTrack(channel.TrackInfo{
+	ch.SetTrack(channel.TrackInfo{
 		Title:   trackArg.Title,
 		Creator: trackArg.Creator,
 		URL:     trackArg.URL,
@@ -337,12 +448,12 @@ func (s *Server) setChannelInfo(params json.RawMessage) (interface{}, *rpcError)
 	return nil, nil
 }
 
-func (s *Server) stopChannel() (interface{}, *rpcError) {
-	s.ch.CloseAll()
+func (s *Server) stopChannel(ch *channel.Channel) (interface{}, *rpcError) {
+	s.mgr.Stop(ch.ID)
 	return nil, nil
 }
 
-func (s *Server) bumpChannel() (interface{}, *rpcError) {
+func (s *Server) bumpChannel(_ *channel.Channel) (interface{}, *rpcError) {
 	if s.ypClient != nil {
 		s.ypClient.Bump()
 	}
@@ -363,7 +474,7 @@ type connEntry struct {
 	RemoteEndPoint *string `json:"remoteEndPoint"`
 }
 
-func (s *Server) getChannelConnections() (interface{}, *rpcError) {
+func (s *Server) getChannelConnections(ch *channel.Channel) (interface{}, *rpcError) {
 	sourceAddr := fmt.Sprintf("127.0.0.1:%d", s.cfg.RTMPPort)
 	result := []connEntry{
 		{
@@ -377,7 +488,7 @@ func (s *Server) getChannelConnections() (interface{}, *rpcError) {
 		},
 	}
 
-	for _, ci := range s.ch.Connections() {
+	for _, ci := range ch.Connections() {
 		typ := "relay"
 		proto := "PCP"
 		if ci.Type == channel.OutputStreamHTTP {
@@ -407,7 +518,8 @@ func (s *Server) stopChannelConnection(params json.RawMessage) (interface{}, *rp
 	if err := json.Unmarshal(args[0], &chanIDStr); err != nil {
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: "invalid channelId"}
 	}
-	if !s.matchChannelID(chanIDStr) {
+	ch, ok := s.lookupChannel(chanIDStr)
+	if !ok {
 		return nil, &rpcError{Code: errCodeInternal, Message: "channel not found"}
 	}
 
@@ -417,12 +529,12 @@ func (s *Server) stopChannelConnection(params json.RawMessage) (interface{}, *rp
 	}
 
 	// Only relay (PCP) connections can be stopped.
-	for _, ci := range s.ch.Connections() {
+	for _, ci := range ch.Connections() {
 		if ci.ID == connID {
 			if ci.Type != channel.OutputStreamPCP {
 				return false, nil
 			}
-			return s.ch.CloseConnection(connID), nil
+			return ch.CloseConnection(connID), nil
 		}
 	}
 	return false, nil
@@ -449,7 +561,7 @@ func (s *Server) getYellowPages() (interface{}, *rpcError) {
 		}
 		count := 0
 		if s.ypClient != nil {
-			count = 1
+			count = len(s.mgr.List())
 		}
 		result[i] = ypEntry{
 			YellowPageID: i,
@@ -483,18 +595,18 @@ type relayTreeNode struct {
 	Children      []relayTreeNode `json:"children"`
 }
 
-func (s *Server) getChannelRelayTree() (interface{}, *rpcError) {
+func (s *Server) getChannelRelayTree(ch *channel.Channel) (interface{}, *rpcError) {
 	node := relayTreeNode{
 		SessionID:     gnuIDString(s.sessionID),
 		Address:       "",
 		Port:          s.cfg.PeercastPort,
 		IsFirewalled:  false,
-		LocalRelays:   s.ch.NumRelays(),
-		LocalDirects:  s.ch.NumListeners(),
+		LocalRelays:   ch.NumRelays(),
+		LocalDirects:  ch.NumListeners(),
 		IsTracker:     true,
-		IsRelayFull:   s.ch.IsRelayFull(s.cfg.MaxRelays),
-		IsDirectFull:  s.ch.IsDirectFull(s.cfg.MaxListeners),
-		IsReceiving:   s.ch.Buffer.HasData(),
+		IsRelayFull:   ch.IsRelayFull(s.cfg.MaxRelays),
+		IsDirectFull:  ch.IsDirectFull(s.cfg.MaxListeners),
+		IsReceiving:   ch.Buffer.HasData(),
 		IsControlFull: false,
 		Version:       version.PCPVersion,
 		VersionString: version.AgentName,

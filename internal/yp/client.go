@@ -22,11 +22,12 @@ const (
 )
 
 // Client maintains a PCP COUT connection to a YP (root server).
+// It announces all channels currently active in the manager.
 type Client struct {
 	addr        string
 	sessionID   pcp.GnuID
 	broadcastID pcp.GnuID
-	ch          *channel.Channel
+	mgr         *channel.Manager
 	listenPort  uint16
 
 	globalIP uint32 // learned from oleh.rip
@@ -36,12 +37,12 @@ type Client struct {
 }
 
 // New creates a new YPClient.
-func New(addr string, sessionID, broadcastID pcp.GnuID, ch *channel.Channel) *Client {
+func New(addr string, sessionID, broadcastID pcp.GnuID, mgr *channel.Manager) *Client {
 	return &Client{
 		addr:        addr,
 		sessionID:   sessionID,
 		broadcastID: broadcastID,
-		ch:          ch,
+		mgr:         mgr,
 		listenPort:  defaultPCPPort,
 		stopCh:      make(chan struct{}),
 		bumpCh:      make(chan struct{}, 1),
@@ -74,7 +75,7 @@ func (c *Client) Stop() {
 	close(c.stopCh)
 }
 
-// Bump triggers an immediate bcst send to the YP.
+// Bump triggers an immediate bcst send to the YP for all active channels.
 func (c *Client) Bump() {
 	select {
 	case c.bumpCh <- struct{}{}:
@@ -127,12 +128,11 @@ handshakeDone:
 	ticker := time.NewTicker(updateInterval)
 	defer ticker.Stop()
 
-	// Send initial bcst (always, or immediately if requested by root > upd).
+	// Send initial bcst for all active channels.
 	_ = sendImmediately
-	if err := conn.WriteAtom(c.buildBcst()); err != nil {
+	if err := c.sendAllBcst(conn); err != nil {
 		return fmt.Errorf("write bcst: %w", err)
 	}
-	slog.Debug("yp: bcst sent", "addr", c.addr, "listeners", c.ch.NumListeners(), "relays", c.ch.NumRelays())
 
 	for {
 		select {
@@ -141,17 +141,28 @@ handshakeDone:
 			slog.Info("yp: disconnected", "addr", c.addr)
 			return nil
 		case <-ticker.C:
-			if err := conn.WriteAtom(c.buildBcst()); err != nil {
+			if err := c.sendAllBcst(conn); err != nil {
 				return fmt.Errorf("write bcst: %w", err)
 			}
-			slog.Debug("yp: bcst sent", "addr", c.addr, "listeners", c.ch.NumListeners(), "relays", c.ch.NumRelays())
 		case <-c.bumpCh:
-			if err := conn.WriteAtom(c.buildBcst()); err != nil {
+			if err := c.sendAllBcst(conn); err != nil {
 				return fmt.Errorf("write bcst (bump): %w", err)
 			}
 			slog.Debug("yp: bcst sent (bump)", "addr", c.addr)
 		}
 	}
+}
+
+// sendAllBcst sends one bcst atom per active channel.
+func (c *Client) sendAllBcst(conn *pcp.Conn) error {
+	channels := c.mgr.List()
+	for _, ch := range channels {
+		if err := conn.WriteAtom(c.buildBcst(ch)); err != nil {
+			return err
+		}
+	}
+	slog.Debug("yp: bcst sent", "addr", c.addr, "channels", len(channels))
+	return nil
 }
 
 func (c *Client) handleOleh(a *pcp.Atom) {
@@ -175,10 +186,10 @@ func (c *Client) buildHelo() *pcp.Atom {
 	)
 }
 
-func (c *Client) buildBcst() *pcp.Atom {
-	info := c.ch.Info()
-	track := c.ch.Track()
-	buf := c.ch.Buffer
+func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
+	info := ch.Info()
+	track := ch.Track()
+	buf := ch.Buffer
 
 	chanInfo := pcp.NewParentAtom(pcp.PCPChanInfo,
 		pcp.NewStringAtom(pcp.PCPChanInfoName, info.Name),
@@ -198,8 +209,8 @@ func (c *Client) buildBcst() *pcp.Atom {
 	)
 
 	chanAtom := pcp.NewParentAtom(pcp.PCPChan,
-		pcp.NewIDAtom(pcp.PCPChanID, c.ch.ID),
-		pcp.NewIDAtom(pcp.PCPChanBCID, c.ch.BroadcastID),
+		pcp.NewIDAtom(pcp.PCPChanID, ch.ID),
+		pcp.NewIDAtom(pcp.PCPChanBCID, ch.BroadcastID),
 		chanInfo,
 		chanTrack,
 	)
@@ -209,12 +220,12 @@ func (c *Client) buildBcst() *pcp.Atom {
 		pcp.NewIDAtom(pcp.PCPHostID, c.sessionID),
 		pcp.NewIntAtom(pcp.PCPHostIP, c.globalIP),
 		pcp.NewShortAtom(pcp.PCPHostPort, c.listenPort),
-		pcp.NewIntAtom(pcp.PCPHostNumListeners, uint32(c.ch.NumListeners())),
-		pcp.NewIntAtom(pcp.PCPHostNumRelays, uint32(c.ch.NumRelays())),
-		pcp.NewIntAtom(pcp.PCPHostUptime, c.ch.UptimeSeconds()),
+		pcp.NewIntAtom(pcp.PCPHostNumListeners, uint32(ch.NumListeners())),
+		pcp.NewIntAtom(pcp.PCPHostNumRelays, uint32(ch.NumRelays())),
+		pcp.NewIntAtom(pcp.PCPHostUptime, ch.UptimeSeconds()),
 		pcp.NewIntAtom(pcp.PCPHostOldPos, buf.OldestPos()),
 		pcp.NewIntAtom(pcp.PCPHostNewPos, buf.NewestPos()),
-		pcp.NewIDAtom(pcp.PCPHostChanID, c.ch.ID),
+		pcp.NewIDAtom(pcp.PCPHostChanID, ch.ID),
 		pcp.NewByteAtom(pcp.PCPHostFlags1, flags),
 		pcp.NewIntAtom(pcp.PCPHostTracker, 1),
 		pcp.NewIntAtom(pcp.PCPHostVersion, version.PCPVersion),
@@ -228,7 +239,7 @@ func (c *Client) buildBcst() *pcp.Atom {
 		pcp.NewByteAtom(pcp.PCPBcstHops, 0),
 		pcp.NewIDAtom(pcp.PCPBcstFrom, c.sessionID),
 		pcp.NewByteAtom(pcp.PCPBcstGroup, byte(pcp.PCPBcstGroupRoot)),
-		pcp.NewIDAtom(pcp.PCPBcstChanID, c.ch.ID),
+		pcp.NewIDAtom(pcp.PCPBcstChanID, ch.ID),
 		pcp.NewIntAtom(pcp.PCPBcstVersion, version.PCPVersion),
 		chanAtom,
 		hostAtom,
