@@ -11,6 +11,12 @@ import (
 	"github.com/titagaki/peercast-mm/internal/id"
 )
 
+// RelayHandle is implemented by relay.Client. Using an interface here avoids
+// an import cycle between the channel and relay packages.
+type RelayHandle interface {
+	Stop()
+}
+
 // Manager manages stream keys and active broadcast channels.
 //
 // Stream keys are long-lived: issuing a key and stopping a channel that uses
@@ -26,10 +32,11 @@ type Manager struct {
 	broadcastID pcp.GnuID
 
 	mu            sync.RWMutex
-	streamKeys    map[string]struct{}  // issued stream keys
+	streamKeys    map[string]struct{}   // issued stream keys
 	byID          map[pcp.GnuID]*Channel
-	byStreamKey   map[string]*Channel  // active channels only
-	streamKeyByID map[pcp.GnuID]string // reverse map for status display
+	byStreamKey   map[string]*Channel   // active channels only
+	streamKeyByID map[pcp.GnuID]string  // reverse map for status display
+	relays        map[pcp.GnuID]RelayHandle // relay clients keyed by channel ID
 }
 
 // NewManager creates a new Manager. broadcastID is the node-level identifier
@@ -41,6 +48,7 @@ func NewManager(broadcastID pcp.GnuID) *Manager {
 		byID:          make(map[pcp.GnuID]*Channel),
 		byStreamKey:   make(map[string]*Channel),
 		streamKeyByID: make(map[pcp.GnuID]string),
+		relays:        make(map[pcp.GnuID]RelayHandle),
 	}
 }
 
@@ -104,7 +112,12 @@ func (m *Manager) Stop(channelID pcp.GnuID) bool {
 	delete(m.byStreamKey, key)
 	delete(m.byID, channelID)
 	delete(m.streamKeyByID, channelID)
+	relay := m.relays[channelID]
+	delete(m.relays, channelID)
 	m.mu.Unlock()
+	if relay != nil {
+		relay.Stop()
+	}
 	ch.CloseAll()
 	return true
 }
@@ -116,13 +129,30 @@ func (m *Manager) StopAll() {
 	for _, ch := range m.byID {
 		channels = append(channels, ch)
 	}
+	relays := make([]RelayHandle, 0, len(m.relays))
+	for _, r := range m.relays {
+		relays = append(relays, r)
+	}
 	m.byID = make(map[pcp.GnuID]*Channel)
 	m.byStreamKey = make(map[string]*Channel)
 	m.streamKeyByID = make(map[pcp.GnuID]string)
+	m.relays = make(map[pcp.GnuID]RelayHandle)
 	m.mu.Unlock()
+	for _, r := range relays {
+		r.Stop()
+	}
 	for _, ch := range channels {
 		ch.CloseAll()
 	}
+}
+
+// AddRelayChannel registers a channel that receives data from an upstream node
+// via a relay client. The relay client must be started separately.
+func (m *Manager) AddRelayChannel(ch *Channel, r RelayHandle) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.byID[ch.ID] = ch
+	m.relays[ch.ID] = r
 }
 
 // GetByStreamKey returns the active channel for the given stream key, if any.

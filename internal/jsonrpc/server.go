@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/titagaki/peercast-mm/internal/channel"
 	"github.com/titagaki/peercast-mm/internal/config"
+	"github.com/titagaki/peercast-mm/internal/relay"
 	"github.com/titagaki/peercast-mm/internal/version"
 )
 
@@ -133,6 +135,8 @@ func (s *Server) dispatch(method string, params json.RawMessage) (interface{}, *
 		return s.getYellowPages()
 	case "getChannelRelayTree":
 		return s.withChannel(params, s.getChannelRelayTree)
+	case "relayChannel":
+		return s.relayChannel(params)
 	default:
 		return nil, &rpcError{Code: errCodeMethodNotFound, Message: fmt.Sprintf("method not found: %s", method)}
 	}
@@ -585,6 +589,45 @@ func (s *Server) getYellowPages() (interface{}, *rpcError) {
 		}
 	}
 	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// Method: relayChannel
+// ---------------------------------------------------------------------------
+
+type relayChannelParam struct {
+	UpstreamAddr string `json:"upstreamAddr"` // "host:port"
+	ChannelID    string `json:"channelId"`    // 32-char hex
+}
+
+func (s *Server) relayChannel(params json.RawMessage) (interface{}, *rpcError) {
+	var args []relayChannelParam
+	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "expected [{upstreamAddr, channelId}]"}
+	}
+	p := args[0]
+	if p.UpstreamAddr == "" {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "upstreamAddr is required"}
+	}
+
+	b, err := hex.DecodeString(p.ChannelID)
+	if err != nil || len(b) != 16 {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "channelId must be a 32-char hex string"}
+	}
+	var chanID pcp.GnuID
+	copy(chanID[:], b)
+
+	if _, ok := s.mgr.GetByID(chanID); ok {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "channel already active"}
+	}
+
+	ch := channel.New(chanID, pcp.GnuID{})
+	client := relay.New(p.UpstreamAddr, chanID, s.sessionID, ch)
+	s.mgr.AddRelayChannel(ch, client)
+	go client.Run()
+
+	slog.Info("relay: started", "addr", p.UpstreamAddr, "channel", p.ChannelID)
+	return map[string]string{"channelId": gnuIDString(chanID)}, nil
 }
 
 // ---------------------------------------------------------------------------
