@@ -65,7 +65,7 @@ func main() {
 			slog.Error("yp: invalid addr", "addr", ypEntry.Addr, "err", err)
 			os.Exit(1)
 		}
-		ypClient := yp.New(hostPort, sessionID, broadcastID, mgr)
+		ypClient := yp.New(hostPort, sessionID, broadcastID, mgr, cfg.PeercastPort)
 		ypClientForAPI = ypClient
 		go func() {
 			slog.Info("yp: connecting", "addr", ypEntry.Addr, "name", ypEntry.Name)

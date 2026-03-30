@@ -20,6 +20,7 @@ import (
 
 const (
 	outputQueueTimeout = 5 * time.Second
+	pcpWriteTimeout    = 10 * time.Second
 	pollInterval       = 50 * time.Millisecond
 )
 
@@ -83,7 +84,6 @@ func (o *PCPOutputStream) Close() {
 	if !o.closed {
 		o.closed = true
 		close(o.closeCh)
-		o.conn.Close()
 	}
 }
 
@@ -300,9 +300,11 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 				pcp.NewIDAtom(pcp.PCPChanID, o.ch.ID),
 				pktAtom,
 			)
+			o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 			if err := atom.Write(o.conn); err != nil {
 				return
 			}
+			o.conn.SetWriteDeadline(time.Time{})
 			pos = pkt.Pos + uint32(len(pkt.Data))
 			lastSend = time.Now()
 		}

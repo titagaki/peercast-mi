@@ -223,13 +223,13 @@ func TestGetChannels(t *testing.T) {
 	if info["name"] != "テストチャンネル" {
 		t.Fatalf("unexpected name: %v", info["name"])
 	}
-	// status
+	// status — no data written to buffer, so status is Idle
 	status := ch["status"].(map[string]interface{})
-	if status["status"] != "Receiving" {
+	if status["status"] != "Idle" {
 		t.Fatalf("unexpected status: %v", status["status"])
 	}
-	if !status["isBroadcasting"].(bool) {
-		t.Fatal("isBroadcasting should be true")
+	if status["isBroadcasting"].(bool) {
+		t.Fatal("isBroadcasting should be false when buffer is empty")
 	}
 	// yellowPages
 	yps := ch["yellowPages"].([]interface{})
@@ -290,7 +290,7 @@ func TestGetChannelStatus(t *testing.T) {
 	s, _, chID := newTestServer(t)
 	resp := rpcCall(t, s, "getChannelStatus", []interface{}{chanIDHex(chID)})
 	result := assertResult(t, resp).(map[string]interface{})
-	if result["status"] != "Receiving" {
+	if result["status"] != "Idle" {
 		t.Fatalf("unexpected status: %v", result["status"])
 	}
 	// source includes the stream key: rtmp://127.0.0.1:1935/live/<streamKey>
@@ -298,8 +298,8 @@ func TestGetChannelStatus(t *testing.T) {
 	if !strings.HasPrefix(src, "rtmp://127.0.0.1:1935/live/sk_") {
 		t.Fatalf("unexpected source: %v", src)
 	}
-	if !result["isBroadcasting"].(bool) {
-		t.Fatal("isBroadcasting should be true")
+	if result["isBroadcasting"].(bool) {
+		t.Fatal("isBroadcasting should be false when buffer is empty")
 	}
 	if result["isRelayFull"].(bool) {
 		t.Fatal("isRelayFull should be false")

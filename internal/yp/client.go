@@ -37,13 +37,16 @@ type Client struct {
 }
 
 // New creates a new YPClient.
-func New(addr string, sessionID, broadcastID pcp.GnuID, mgr *channel.Manager) *Client {
+func New(addr string, sessionID, broadcastID pcp.GnuID, mgr *channel.Manager, listenPort int) *Client {
+	if listenPort <= 0 {
+		listenPort = defaultPCPPort
+	}
 	return &Client{
 		addr:        addr,
 		sessionID:   sessionID,
 		broadcastID: broadcastID,
 		mgr:         mgr,
-		listenPort:  defaultPCPPort,
+		listenPort:  uint16(listenPort),
 		stopCh:      make(chan struct{}),
 		bumpCh:      make(chan struct{}, 1),
 	}
@@ -53,8 +56,12 @@ func New(addr string, sessionID, broadcastID pcp.GnuID, mgr *channel.Manager) *C
 func (c *Client) Run() {
 	delay := retryInitial
 	for {
-		if err := c.run(); err != nil {
+		connected, err := c.run()
+		if err != nil {
 			slog.Error("yp: connection error", "addr", c.addr, "err", err)
+		}
+		if connected {
+			delay = retryInitial
 		}
 
 		select {
@@ -83,16 +90,16 @@ func (c *Client) Bump() {
 	}
 }
 
-func (c *Client) run() error {
+func (c *Client) run() (connected bool, err error) {
 	conn, err := pcp.Dial(c.addr)
 	if err != nil {
-		return fmt.Errorf("dial: %w", err)
+		return false, fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
 
 	// Send helo.
 	if err := conn.WriteAtom(c.buildHelo()); err != nil {
-		return fmt.Errorf("write helo: %w", err)
+		return false, fmt.Errorf("write helo: %w", err)
 	}
 
 	updateInterval := defaultInterval
@@ -102,7 +109,7 @@ func (c *Client) run() error {
 	for {
 		a, err := conn.ReadAtom()
 		if err != nil {
-			return fmt.Errorf("read handshake: %w", err)
+			return false, fmt.Errorf("read handshake: %w", err)
 		}
 		switch a.Tag {
 		case pcp.PCPOleh:
@@ -118,7 +125,7 @@ func (c *Client) run() error {
 		case pcp.PCPOK:
 			goto handshakeDone
 		case pcp.PCPQuit:
-			return fmt.Errorf("quit from YP during handshake")
+			return false, fmt.Errorf("quit from YP during handshake")
 		}
 	}
 
@@ -131,7 +138,7 @@ handshakeDone:
 	// Send initial bcst for all active channels.
 	_ = sendImmediately
 	if err := c.sendAllBcst(conn); err != nil {
-		return fmt.Errorf("write bcst: %w", err)
+		return true, fmt.Errorf("write bcst: %w", err)
 	}
 
 	for {
@@ -139,14 +146,14 @@ handshakeDone:
 		case <-c.stopCh:
 			_ = conn.WriteAtom(pcp.NewIntAtom(pcp.PCPQuit, pcp.PCPErrorQuit+pcp.PCPErrorShutdown))
 			slog.Info("yp: disconnected", "addr", c.addr)
-			return nil
+			return true, nil
 		case <-ticker.C:
 			if err := c.sendAllBcst(conn); err != nil {
-				return fmt.Errorf("write bcst: %w", err)
+				return true, fmt.Errorf("write bcst: %w", err)
 			}
 		case <-c.bumpCh:
 			if err := c.sendAllBcst(conn); err != nil {
-				return fmt.Errorf("write bcst (bump): %w", err)
+				return true, fmt.Errorf("write bcst (bump): %w", err)
 			}
 			slog.Debug("yp: bcst sent (bump)", "addr", c.addr)
 		}
