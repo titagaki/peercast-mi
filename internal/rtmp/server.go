@@ -17,8 +17,9 @@ import (
 
 // Server listens for RTMP push connections from an encoder.
 type Server struct {
-	srv  *gortmp.Server
-	port int
+	srv      *gortmp.Server
+	port     int
+	listener net.Listener
 }
 
 // NewServer creates an RTMP server that feeds incoming streams into channels
@@ -37,13 +38,27 @@ func NewServer(mgr *channel.Manager, port int) *Server {
 	return s
 }
 
-// ListenAndServe starts listening on the configured RTMP port.
-func (s *Server) ListenAndServe() error {
+// Listen binds to the configured RTMP port. It must be called before Serve.
+func (s *Server) Listen() error {
 	l, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
 	if err != nil {
 		return fmt.Errorf("rtmp: listen: %w", err)
 	}
-	return s.srv.Serve(l)
+	s.listener = l
+	return nil
+}
+
+// Serve accepts RTMP connections. Listen must be called first.
+func (s *Server) Serve() error {
+	return s.srv.Serve(s.listener)
+}
+
+// ListenAndServe is a convenience wrapper around Listen + Serve.
+func (s *Server) ListenAndServe() error {
+	if err := s.Listen(); err != nil {
+		return err
+	}
+	return s.Serve()
 }
 
 // Close shuts down the RTMP server.
@@ -157,6 +172,15 @@ func (h *handler) OnAudio(timestamp uint32, payload io.Reader) error {
 
 func (h *handler) OnClose() {
 	slog.Info("rtmp: encoder disconnected", "remote", h.remoteAddr)
+	if h.streamKey == "" {
+		return
+	}
+	ch, ok := h.mgr.GetByStreamKey(h.streamKey)
+	if !ok {
+		return
+	}
+	slog.Info("rtmp: stopping channel on encoder disconnect", "key", h.streamKey, "channel_id", ch.ID)
+	h.mgr.Stop(ch.ID)
 }
 
 // rebuildHeader assembles the FLV head packet from accumulated sequence headers

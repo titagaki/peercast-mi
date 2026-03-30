@@ -41,9 +41,13 @@ func main() {
 
 	// Start OutputListener.
 	listener := servent.NewListener(sessionID, mgr, cfg.PeercastPort, cfg.MaxRelays, cfg.MaxListeners)
+	if err := listener.Listen(); err != nil {
+		slog.Error("output: listen failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("output: listening", "port", cfg.PeercastPort)
 	go func() {
-		slog.Info("output: listening", "port", cfg.PeercastPort)
-		if err := listener.ListenAndServe(); err != nil {
+		if err := listener.Serve(); err != nil {
 			slog.Error("output: listener stopped", "err", err)
 		}
 	}()
@@ -77,9 +81,13 @@ func main() {
 
 	// Start RTMP server.
 	rtmpServer := rtmp.NewServer(mgr, cfg.RTMPPort)
+	if err := rtmpServer.Listen(); err != nil {
+		slog.Error("rtmp: listen failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("rtmp: listening", "port", cfg.RTMPPort)
 	go func() {
-		slog.Info("rtmp: listening", "port", cfg.RTMPPort)
-		if err := rtmpServer.ListenAndServe(); err != nil {
+		if err := rtmpServer.Serve(); err != nil {
 			slog.Error("rtmp: server stopped", "err", err)
 		}
 	}()

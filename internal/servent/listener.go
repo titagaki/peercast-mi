@@ -47,15 +47,20 @@ func (l *Listener) SetAPIHandler(h http.Handler) {
 	l.apiHandler = h
 }
 
-// ListenAndServe starts listening on the configured PeerCast port.
-func (l *Listener) ListenAndServe() error {
+// Listen binds to the configured PeerCast port. It must be called before Serve.
+func (l *Listener) Listen() error {
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", l.port))
 	if err != nil {
 		return fmt.Errorf("servent: listen: %w", err)
 	}
 	l.listener = ln
-	defer ln.Close()
+	return nil
+}
 
+// Serve accepts incoming connections. Listen must be called first.
+func (l *Listener) Serve() error {
+	ln := l.listener
+	defer ln.Close()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -63,6 +68,14 @@ func (l *Listener) ListenAndServe() error {
 		}
 		go l.handle(conn)
 	}
+}
+
+// ListenAndServe is a convenience wrapper around Listen + Serve.
+func (l *Listener) ListenAndServe() error {
+	if err := l.Listen(); err != nil {
+		return err
+	}
+	return l.Serve()
 }
 
 // Close shuts down the listener.

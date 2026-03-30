@@ -350,15 +350,20 @@ func (s *Server) buildStatus(ch *channel.Channel) chanStatusResult {
 	if key, ok := s.mgr.StreamKeyByID(ch.ID); ok {
 		source = fmt.Sprintf("rtmp://127.0.0.1:%d/live/%s", s.cfg.RTMPPort, key)
 	}
+	receiving := ch.Buffer.HasData()
+	status := "Idle"
+	if receiving {
+		status = "Receiving"
+	}
 	return chanStatusResult{
-		Status:         "Receiving",
+		Status:         status,
 		Source:         source,
 		TotalDirects:   ch.NumListeners(),
 		TotalRelays:    ch.NumRelays(),
-		IsBroadcasting: true,
+		IsBroadcasting: receiving,
 		IsRelayFull:    ch.IsRelayFull(s.cfg.MaxRelays),
 		IsDirectFull:   ch.IsDirectFull(s.cfg.MaxListeners),
-		IsReceiving:    ch.Buffer.HasData(),
+		IsReceiving:    receiving,
 	}
 }
 
@@ -476,11 +481,15 @@ type connEntry struct {
 
 func (s *Server) getChannelConnections(ch *channel.Channel) (interface{}, *rpcError) {
 	sourceAddr := fmt.Sprintf("127.0.0.1:%d", s.cfg.RTMPPort)
+	sourceStatus := "Idle"
+	if ch.Buffer.HasData() {
+		sourceStatus = "Receiving"
+	}
 	result := []connEntry{
 		{
 			ConnectionID:   -1,
 			Type:           "source",
-			Status:         "Receiving",
+			Status:         sourceStatus,
 			SendRate:       0,
 			RecvRate:       0,
 			ProtocolName:   "RTMP",

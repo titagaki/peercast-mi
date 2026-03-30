@@ -76,7 +76,8 @@ func (b *ContentBuffer) NewestPos() uint32 {
 
 // Since returns all packets at or after the given stream position.
 // If pos is older than the oldest buffered packet, returns from the oldest.
-// Returns the first keyframe (Cont=false) onwards.
+// Packets are returned as-is regardless of keyframe status; callers that need
+// keyframe-aligned delivery (new connections) must apply their own filter.
 func (b *ContentBuffer) Since(pos uint32) []Content {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

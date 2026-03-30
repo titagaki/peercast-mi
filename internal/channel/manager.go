@@ -79,9 +79,8 @@ func (m *Manager) Broadcast(streamKey string, info ChannelInfo, track TrackInfo)
 	if _, ok := m.byStreamKey[streamKey]; ok {
 		return nil, fmt.Errorf("stream key %q already has an active channel", streamKey)
 	}
-	chBroadcastID := id.NewRandom()
 	channelID := channelIDForBroadcast(m.broadcastID, streamKey, info.Name, info.Genre, info.Bitrate)
-	ch := New(channelID, chBroadcastID)
+	ch := New(channelID, m.broadcastID)
 	// Set info/track directly: ch is not yet visible to other goroutines.
 	ch.info = info
 	ch.track = track

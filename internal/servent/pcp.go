@@ -211,6 +211,7 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 	}
 
 	lastSend := time.Now()
+	waitingForKeyframe := true
 
 	for {
 		select {
@@ -278,6 +279,13 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 		}
 
 		for _, pkt := range packets {
+			if waitingForKeyframe && pkt.Cont {
+				// Skip continuation packets until the first keyframe.
+				pos = pkt.Pos + uint32(len(pkt.Data))
+				continue
+			}
+			waitingForKeyframe = false
+
 			cont := byte(0)
 			if pkt.Cont {
 				cont = 1
