@@ -178,7 +178,7 @@ func (c *Client) handleChan(atom *pcp.Atom) {
 		switch child.Tag {
 		case pcp.PCPChanBCID:
 			if bcID, err := child.GetID(); err == nil {
-				c.ch.BroadcastID = bcID
+				c.ch.SetBroadcastID(bcID)
 			}
 		case pcp.PCPChanInfo:
 			c.ch.SetInfo(parseChanInfo(child))

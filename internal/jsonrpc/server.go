@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -354,9 +356,12 @@ func (s *Server) buildYPRefs() []ypRef {
 }
 
 func (s *Server) buildStatus(ch *channel.Channel) chanStatusResult {
-	source := fmt.Sprintf("rtmp://127.0.0.1:%d/live", s.cfg.RTMPPort)
-	if key, ok := s.mgr.StreamKeyByID(ch.ID); ok {
-		source = fmt.Sprintf("rtmp://127.0.0.1:%d/live/%s", s.cfg.RTMPPort, key)
+	source := ch.Source()
+	if source == "" {
+		source = fmt.Sprintf("rtmp://127.0.0.1:%d/live", s.cfg.RTMPPort)
+		if key, ok := s.mgr.StreamKeyByID(ch.ID); ok {
+			source = fmt.Sprintf("rtmp://127.0.0.1:%d/live/%s", s.cfg.RTMPPort, key)
+		}
 	}
 	receiving := ch.Buffer.HasData()
 	status := "Idle"
@@ -368,7 +373,7 @@ func (s *Server) buildStatus(ch *channel.Channel) chanStatusResult {
 		Source:         source,
 		TotalDirects:   ch.NumListeners(),
 		TotalRelays:    ch.NumRelays(),
-		IsBroadcasting: receiving,
+		IsBroadcasting: ch.IsBroadcasting(),
 		IsRelayFull:    ch.IsRelayFull(s.cfg.MaxRelays),
 		IsDirectFull:   ch.IsDirectFull(s.cfg.MaxListeners),
 		IsReceiving:    receiving,
@@ -488,7 +493,12 @@ type connEntry struct {
 }
 
 func (s *Server) getChannelConnections(ch *channel.Channel) (interface{}, *rpcError) {
+	sourceProto := "RTMP"
 	sourceAddr := fmt.Sprintf("127.0.0.1:%d", s.cfg.RTMPPort)
+	if upstream := ch.UpstreamAddr(); upstream != "" {
+		sourceProto = "PCP"
+		sourceAddr = upstream
+	}
 	sourceStatus := "Idle"
 	if ch.Buffer.HasData() {
 		sourceStatus = "Receiving"
@@ -500,7 +510,7 @@ func (s *Server) getChannelConnections(ch *channel.Channel) (interface{}, *rpcEr
 			Status:         sourceStatus,
 			SendRate:       0,
 			RecvRate:       0,
-			ProtocolName:   "RTMP",
+			ProtocolName:   sourceProto,
 			RemoteEndPoint: &sourceAddr,
 		},
 	}
@@ -606,8 +616,19 @@ func (s *Server) relayChannel(params json.RawMessage) (interface{}, *rpcError) {
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: "expected [{upstreamAddr, channelId}]"}
 	}
 	p := args[0]
-	if p.UpstreamAddr == "" {
-		return nil, &rpcError{Code: errCodeInvalidParams, Message: "upstreamAddr is required"}
+
+	upstreamAddr := p.UpstreamAddr
+	if upstreamAddr == "" {
+		// Auto-discover: use the first configured YP as the upstream source.
+		if len(s.cfg.YPs) == 0 {
+			return nil, &rpcError{Code: errCodeInvalidParams, Message: "upstreamAddr is required when no YP is configured"}
+		}
+		hp, err := s.cfg.YPs[0].HostPort()
+		if err != nil {
+			return nil, &rpcError{Code: errCodeInternal, Message: "failed to resolve YP address"}
+		}
+		upstreamAddr = hp
+		slog.Info("relay: auto-discovered upstream from YP", "addr", upstreamAddr)
 	}
 
 	b, err := hex.DecodeString(p.ChannelID)
@@ -622,11 +643,13 @@ func (s *Server) relayChannel(params json.RawMessage) (interface{}, *rpcError) {
 	}
 
 	ch := channel.New(chanID, pcp.GnuID{})
-	client := relay.New(p.UpstreamAddr, chanID, s.sessionID, ch)
+	ch.SetSource(upstreamAddr)
+	ch.SetUpstreamAddr(upstreamAddr)
+	client := relay.New(upstreamAddr, chanID, s.sessionID, ch)
 	s.mgr.AddRelayChannel(ch, client)
 	go client.Run()
 
-	slog.Info("relay: started", "addr", p.UpstreamAddr, "channel", p.ChannelID)
+	slog.Info("relay: started", "addr", upstreamAddr, "channel", p.ChannelID)
 	return map[string]string{"channelId": gnuIDString(chanID)}, nil
 }
 
@@ -652,14 +675,14 @@ type relayTreeNode struct {
 }
 
 func (s *Server) getChannelRelayTree(ch *channel.Channel) (interface{}, *rpcError) {
-	node := relayTreeNode{
+	thisNode := relayTreeNode{
 		SessionID:     gnuIDString(s.sessionID),
 		Address:       "",
 		Port:          s.cfg.PeercastPort,
 		IsFirewalled:  false,
 		LocalRelays:   ch.NumRelays(),
 		LocalDirects:  ch.NumListeners(),
-		IsTracker:     true,
+		IsTracker:     ch.IsBroadcasting(),
 		IsRelayFull:   ch.IsRelayFull(s.cfg.MaxRelays),
 		IsDirectFull:  ch.IsDirectFull(s.cfg.MaxListeners),
 		IsReceiving:   ch.Buffer.HasData(),
@@ -668,5 +691,28 @@ func (s *Server) getChannelRelayTree(ch *channel.Channel) (interface{}, *rpcErro
 		VersionString: version.AgentName,
 		Children:      []relayTreeNode{},
 	}
-	return []relayTreeNode{node}, nil
+
+	if upstream := ch.UpstreamAddr(); upstream != "" {
+		host, portStr, _ := net.SplitHostPort(upstream)
+		port, _ := strconv.Atoi(portStr)
+		upstreamNode := relayTreeNode{
+			SessionID:     "",
+			Address:       host,
+			Port:          port,
+			IsFirewalled:  false,
+			LocalRelays:   0,
+			LocalDirects:  0,
+			IsTracker:     false,
+			IsRelayFull:   false,
+			IsDirectFull:  false,
+			IsReceiving:   true,
+			IsControlFull: false,
+			Version:       0,
+			VersionString: "",
+			Children:      []relayTreeNode{thisNode},
+		}
+		return []relayTreeNode{upstreamNode}, nil
+	}
+
+	return []relayTreeNode{thisNode}, nil
 }

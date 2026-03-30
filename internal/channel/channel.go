@@ -45,27 +45,79 @@ type ConnectionInfo struct {
 
 // Channel is the central data structure for an active broadcast.
 type Channel struct {
-	ID          pcp.GnuID
-	BroadcastID pcp.GnuID
-	Buffer      *ContentBuffer
-	StartTime   time.Time
+	ID        pcp.GnuID
+	Buffer    *ContentBuffer
+	StartTime time.Time
 
-	mu           sync.RWMutex
-	info         ChannelInfo
-	track        TrackInfo
-	outputs      []OutputStream
-	numListeners int // HTTPOutputStream の数
-	numRelays    int // PCPOutputStream の数
+	mu             sync.RWMutex
+	broadcastID    pcp.GnuID
+	isBroadcasting bool   // true for RTMP-sourced channels, false for relay channels
+	source         string // display source (e.g. upstream addr for relay)
+	upstreamAddr   string // upstream host:port for relay channels
+	info           ChannelInfo
+	track          TrackInfo
+	outputs        []OutputStream
+	numListeners   int // HTTPOutputStream の数
+	numRelays      int // PCPOutputStream の数
 }
 
 // New creates a new Channel.
 func New(id, broadcastID pcp.GnuID) *Channel {
 	return &Channel{
 		ID:          id,
-		BroadcastID: broadcastID,
+		broadcastID: broadcastID,
 		Buffer:      &ContentBuffer{},
 		StartTime:   time.Now(),
 	}
+}
+
+// BroadcastID returns the broadcast ID.
+func (c *Channel) BroadcastID() pcp.GnuID {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.broadcastID
+}
+
+// SetBroadcastID updates the broadcast ID in a thread-safe manner.
+func (c *Channel) SetBroadcastID(id pcp.GnuID) {
+	c.mu.Lock()
+	c.broadcastID = id
+	c.mu.Unlock()
+}
+
+// IsBroadcasting reports whether this channel is sourced from a local RTMP push.
+func (c *Channel) IsBroadcasting() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isBroadcasting
+}
+
+// Source returns the display source string (e.g. RTMP URI or upstream address).
+func (c *Channel) Source() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.source
+}
+
+// SetSource sets the display source string.
+func (c *Channel) SetSource(s string) {
+	c.mu.Lock()
+	c.source = s
+	c.mu.Unlock()
+}
+
+// UpstreamAddr returns the upstream host:port for relay channels.
+func (c *Channel) UpstreamAddr() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.upstreamAddr
+}
+
+// SetUpstreamAddr sets the upstream address for relay channels.
+func (c *Channel) SetUpstreamAddr(addr string) {
+	c.mu.Lock()
+	c.upstreamAddr = addr
+	c.mu.Unlock()
 }
 
 // Info returns the current ChannelInfo.

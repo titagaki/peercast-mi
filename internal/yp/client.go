@@ -177,15 +177,20 @@ handshakeDone:
 	}
 }
 
-// sendAllBcst sends one bcst atom per active channel.
+// sendAllBcst sends one bcst atom per broadcasting (non-relay) channel.
 func (c *Client) sendAllBcst(conn *pcp.Conn) error {
 	channels := c.mgr.List()
+	count := 0
 	for _, ch := range channels {
+		if !ch.IsBroadcasting() {
+			continue
+		}
 		if err := conn.WriteAtom(c.buildBcst(ch)); err != nil {
 			return err
 		}
+		count++
 	}
-	slog.Debug("yp: bcst sent", "addr", c.addr, "channels", len(channels))
+	slog.Debug("yp: bcst sent", "addr", c.addr, "channels", count)
 	return nil
 }
 
@@ -234,7 +239,7 @@ func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
 
 	chanAtom := pcp.NewParentAtom(pcp.PCPChan,
 		pcp.NewIDAtom(pcp.PCPChanID, ch.ID),
-		pcp.NewIDAtom(pcp.PCPChanBCID, ch.BroadcastID),
+		pcp.NewIDAtom(pcp.PCPChanBCID, ch.BroadcastID()),
 		chanInfo,
 		chanTrack,
 	)

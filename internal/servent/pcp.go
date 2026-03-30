@@ -164,7 +164,7 @@ func (o *PCPOutputStream) sendInitial() error {
 	track := o.ch.Track()
 	header, headerPos := o.ch.Buffer.Header()
 
-	chanAtom := buildChanAtom(o.ch.ID, o.ch.BroadcastID, info, track, header, headerPos)
+	chanAtom := buildChanAtom(o.ch.ID, o.ch.BroadcastID(), info, track, header, headerPos)
 	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 	err := chanAtom.Write(o.conn)
 	o.conn.SetWriteDeadline(time.Time{})

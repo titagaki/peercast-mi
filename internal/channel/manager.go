@@ -89,7 +89,8 @@ func (m *Manager) Broadcast(streamKey string, info ChannelInfo, track TrackInfo)
 	}
 	channelID := channelIDForBroadcast(m.broadcastID, streamKey, info.Name, info.Genre, info.Bitrate)
 	ch := New(channelID, m.broadcastID)
-	// Set info/track directly: ch is not yet visible to other goroutines.
+	// Set fields directly: ch is not yet visible to other goroutines.
+	ch.isBroadcasting = true
 	ch.info = info
 	ch.track = track
 	m.byID[channelID] = ch

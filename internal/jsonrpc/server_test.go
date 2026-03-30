@@ -228,8 +228,8 @@ func TestGetChannels(t *testing.T) {
 	if status["status"] != "Idle" {
 		t.Fatalf("unexpected status: %v", status["status"])
 	}
-	if status["isBroadcasting"].(bool) {
-		t.Fatal("isBroadcasting should be false when buffer is empty")
+	if !status["isBroadcasting"].(bool) {
+		t.Fatal("isBroadcasting should be true for broadcast channel")
 	}
 	// yellowPages
 	yps := ch["yellowPages"].([]interface{})
@@ -298,8 +298,8 @@ func TestGetChannelStatus(t *testing.T) {
 	if !strings.HasPrefix(src, "rtmp://127.0.0.1:1935/live/sk_") {
 		t.Fatalf("unexpected source: %v", src)
 	}
-	if result["isBroadcasting"].(bool) {
-		t.Fatal("isBroadcasting should be false when buffer is empty")
+	if !result["isBroadcasting"].(bool) {
+		t.Fatal("isBroadcasting should be true for broadcast channel")
 	}
 	if result["isRelayFull"].(bool) {
 		t.Fatal("isRelayFull should be false")
