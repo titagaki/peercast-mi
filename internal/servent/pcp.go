@@ -30,12 +30,14 @@ type PCPOutputStream struct {
 }
 
 func newPCPOutputStream(conn *countingConn, br *bufio.Reader, sessionID pcp.GnuID, ch *channel.Channel, id int) *PCPOutputStream {
-	return &PCPOutputStream{
+	o := &PCPOutputStream{
 		outputBase: newOutputBase(conn, id),
 		br:         br,
 		sessionID:  sessionID,
 		ch:         ch,
 	}
+	o.onClose = func() { conn.Close() }
+	return o
 }
 
 // Type implements channel.OutputStream.
@@ -95,26 +97,34 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 		return 0, fmt.Errorf("expected helo, got %s", heloAtom.Tag)
 	}
 
-	// Validate helo.
-	if sid := heloAtom.FindChild(pcp.PCPHeloSessionID); sid != nil {
-		id, err := sid.GetID()
-		if err == nil {
-			if id == o.sessionID {
-				o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorLoopback)
-				return 0, fmt.Errorf("loopback connection")
-			}
-			var zero pcp.GnuID
-			if id == zero {
-				o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorNotIdentified)
-				return 0, fmt.Errorf("not identified")
-			}
-		}
+	// Validate helo: sid and ver are mandatory per PCP spec.
+	sidAtom := heloAtom.FindChild(pcp.PCPHeloSessionID)
+	if sidAtom == nil {
+		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorNotIdentified)
+		return 0, fmt.Errorf("no session ID in helo")
 	}
-	if ver := heloAtom.FindChild(pcp.PCPHeloVersion); ver != nil {
-		if v, err := ver.GetInt(); err == nil && v < 1200 {
-			o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorBadAgent)
-			return 0, fmt.Errorf("bad agent version %d", v)
-		}
+	peerID, err := sidAtom.GetID()
+	if err != nil {
+		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorNotIdentified)
+		return 0, fmt.Errorf("invalid session ID: %w", err)
+	}
+	if peerID == o.sessionID {
+		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorLoopback)
+		return 0, fmt.Errorf("loopback connection")
+	}
+	var zeroID pcp.GnuID
+	if peerID == zeroID {
+		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorNotIdentified)
+		return 0, fmt.Errorf("not identified")
+	}
+	verAtom := heloAtom.FindChild(pcp.PCPHeloVersion)
+	if verAtom == nil {
+		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorBadAgent)
+		return 0, fmt.Errorf("no version in helo")
+	}
+	if v, err := verAtom.GetInt(); err == nil && v < 1200 {
+		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorBadAgent)
+		return 0, fmt.Errorf("bad agent version %d", v)
 	}
 
 	// Send HTTP 200 OK first; oleh goes in the response body.
@@ -145,7 +155,10 @@ func (o *PCPOutputStream) sendInitial() error {
 	header, headerPos := o.ch.Buffer.Header()
 
 	chanAtom := buildChanAtom(o.ch.ID, o.ch.BroadcastID, info, track, header, headerPos)
-	return chanAtom.Write(o.conn)
+	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
+	err := chanAtom.Write(o.conn)
+	o.conn.SetWriteDeadline(time.Time{})
+	return err
 }
 
 // streamLoop continuously sends buffered content packets to the peer.
@@ -212,7 +225,8 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 			continue
 		}
 
-		// No data available — block until an event arrives.
+		// No data available — not a queue stall; reset the timer.
+		stallTimer.Reset(outputQueueTimeout)
 		select {
 		case <-o.closeCh:
 			o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorShutdown)
@@ -255,7 +269,9 @@ func (o *PCPOutputStream) sendInfoUpdate() {
 		pcp.NewIDAtom(pcp.PCPChanID, o.ch.ID),
 		buildChanInfoAtom(info),
 	)
+	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 	atom.Write(o.conn)
+	o.conn.SetWriteDeadline(time.Time{})
 }
 
 func (o *PCPOutputStream) sendTrackUpdate() {
@@ -264,7 +280,9 @@ func (o *PCPOutputStream) sendTrackUpdate() {
 		pcp.NewIDAtom(pcp.PCPChanID, o.ch.ID),
 		buildChanTrackAtom(track),
 	)
+	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 	atom.Write(o.conn)
+	o.conn.SetWriteDeadline(time.Time{})
 }
 
 func (o *PCPOutputStream) sendHeaderUpdate() {
@@ -273,7 +291,9 @@ func (o *PCPOutputStream) sendHeaderUpdate() {
 		pcp.NewIDAtom(pcp.PCPChanID, o.ch.ID),
 		buildPktHeadAtom(header, hpos),
 	)
+	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 	atom.Write(o.conn)
+	o.conn.SetWriteDeadline(time.Time{})
 }
 
 // tryReadBcst does a non-blocking read for bcst atoms from the downstream peer.

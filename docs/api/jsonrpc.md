@@ -257,13 +257,13 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 
 | フィールド | 説明 |
 |---|---|
-| `status` | 常に `"Receiving"`（固定値） |
+| `status` | `"Receiving"` (RTMP データ受信中) または `"Idle"` (未受信)。`ContentBuffer.HasData()` に基づく |
 | `source` | `rtmp://127.0.0.1:<rtmpPort>/live/<streamKey>` |
 | `totalDirects` | HTTP 直接視聴接続数（`Channel.NumListeners()`） |
 | `totalRelays` | PCP リレー接続数（`Channel.NumRelays()`） |
-| `isBroadcasting` | 常に `true`（固定値） |
-| `isRelayFull` | 常に `false`（制限なし） |
-| `isDirectFull` | 常に `false`（制限なし） |
+| `isBroadcasting` | RTMP からデータを受信済みなら `true`（`ContentBuffer.HasData()`） |
+| `isRelayFull` | リレー接続が上限に達していれば `true`（`Channel.IsRelayFull()`）。上限未設定時は常に `false` |
+| `isDirectFull` | 直接視聴接続が上限に達していれば `true`（`Channel.IsDirectFull()`）。上限未設定時は常に `false` |
 | `isReceiving` | RTMP からデータを受信済みなら `true`（`ContentBuffer.HasData()`） |
 
 ---
@@ -342,7 +342,7 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
 |---|---|
 | `connectionId` | 接続 ID。ソースは常に `-1`、出力接続は `Listener` が採番した正の整数 |
 | `type` | `"source"` / `"relay"` / `"direct"` |
-| `status` | ソースは `"Receiving"`、出力接続は `"Connected"`（固定値） |
+| `status` | ソースは `"Receiving"` または `"Idle"`（`HasData()` に基づく）、出力接続は `"Connected"`（固定値） |
 | `sendRate` | bytes/sec（`OutputStream.SendRate()`）。ソースは常に `0` |
 | `recvRate` | bytes/sec。現実装では常に `0` |
 | `protocolName` | ソースは `"RTMP"`、PCP リレーは `"PCP"`、HTTP 直接は `"HTTP"` |
@@ -424,7 +424,7 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
 - 同じストリームキーで放送中に再度 `broadcastChannel` を呼ぶとエラー。`stopChannel` してから再呼び出しする。
 - `broadcastChannel` より先に RTMP push が来ても受け付ける（ストリームキーが発行済みであれば）。チャンネルが作成されるまでの RTMP データは静かにドロップされる。
 - `channelId` の照合は大文字・小文字を区別しない。
-- `getChannelStatus.status` は現在 `"Receiving"` 固定。RTMP 未受信時は `isReceiving: false` で区別する。
+- `getChannelStatus.status` は `"Receiving"` (RTMP データ受信中) または `"Idle"` (未受信)。
 - `getChannelConnections` の `recvRate` は常に `0`（RTMP 受信レートの計測は未実装）。
 - `getYellowPages` の `channelCount` はアクティブなチャンネル数（`Manager.List()` の件数）を返す。
 - `getChannelRelayTree` の `address` は空文字列（グローバル IP 未取得）。

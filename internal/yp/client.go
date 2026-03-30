@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -37,8 +38,10 @@ type Client struct {
 
 	globalIP uint32 // learned from oleh.rip
 
-	stopCh chan struct{}
-	bumpCh chan struct{}
+	stopCh   chan struct{}
+	bumpCh   chan struct{}
+	doneCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // New creates a new YPClient.
@@ -54,11 +57,13 @@ func New(addr string, sessionID, broadcastID pcp.GnuID, mgr ChannelLister, liste
 		listenPort:  uint16(listenPort),
 		stopCh:      make(chan struct{}),
 		bumpCh:      make(chan struct{}, 1),
+		doneCh:      make(chan struct{}),
 	}
 }
 
 // Run connects to the YP and runs the bcst loop, reconnecting on failure.
 func (c *Client) Run() {
+	defer close(c.doneCh)
 	delay := retryInitial
 	for {
 		connected, err := c.run()
@@ -82,9 +87,16 @@ func (c *Client) Run() {
 	}
 }
 
-// Stop signals the client to shut down.
+const stopTimeout = 3 * time.Second
+
+// Stop signals the client to shut down and waits for quit to be sent to the YP.
 func (c *Client) Stop() {
-	close(c.stopCh)
+	c.stopOnce.Do(func() { close(c.stopCh) })
+	select {
+	case <-c.doneCh:
+	case <-time.After(stopTimeout):
+		slog.Warn("yp: stop timed out", "addr", c.addr)
+	}
 }
 
 // Bump triggers an immediate bcst send to the YP for all active channels.
