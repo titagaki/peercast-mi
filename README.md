@@ -41,6 +41,22 @@ peercast_port = 7144
 # ログレベル: "debug" | "info" | "warn" | "error"  (デフォルト: "info")
 # log_level = "info"
 
+# 直下に接続できるリレーノード数の上限 (デフォルト: 0 = 無制限)
+# max_relays = 4
+
+# 全チャンネル合計のリレーノード数の上限 (デフォルト: 0 = 無制限)
+# max_relays_total = 16
+
+# 直下に接続できる HTTP 視聴者数の上限 (デフォルト: 0 = 無制限)
+# max_listeners = 4
+
+# 全チャンネル合計の上り帯域上限 kbps (デフォルト: 0 = 無制限)
+# max_upstream_kbps = 0
+
+# コンテンツリングバッファが保持する秒数 (デフォルト: 0 = 8秒)
+# ビットレートから必要なパケット数を自動計算する
+# content_buffer_seconds = 8
+
 [[yp]]
 name = "moe"
 addr = "pcp://yp.pcmoe.net/"
