@@ -49,6 +49,11 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 
+		if !isLocalhost(r.RemoteAddr) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+
 		var req rpcRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeRPCError(w, nil, errCodeParse, "parse error")
@@ -93,6 +98,17 @@ const (
 	errCodeInvalidParams  = -32602
 	errCodeInternal       = -32603
 )
+
+// isLocalhost reports whether remoteAddr (in "host:port" form) is a
+// loopback address.
+func isLocalhost(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
 
 func writeRPCError(w http.ResponseWriter, id json.RawMessage, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")

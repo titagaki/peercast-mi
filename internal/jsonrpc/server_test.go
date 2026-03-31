@@ -62,6 +62,7 @@ func post(t *testing.T, s *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/1", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:12345"
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 	return w
@@ -646,5 +647,18 @@ func TestResponseEnvelope_IDEchoed(t *testing.T) {
 	json.NewDecoder(bytes.NewReader(w.Body.Bytes())).Decode(&resp)
 	if int(resp["id"].(float64)) != 42 {
 		t.Fatalf("expected id 42, got %v", resp["id"])
+	}
+}
+
+func TestNonLocalhostForbidden(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	body := `{"jsonrpc":"2.0","method":"getVersionInfo","params":[],"id":1}`
+	req := httptest.NewRequest(http.MethodPost, "/api/1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.168.1.100:12345"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-localhost, got %d", w.Code)
 	}
 }
