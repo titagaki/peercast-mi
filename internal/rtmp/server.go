@@ -152,8 +152,11 @@ func (h *handler) OnVideo(timestamp uint32, payload io.Reader) error {
 	}
 
 	// keyframe (0x17) or inter (0x27)
-	cont := body[0] != 0x17
-	h.writeData(tag, cont)
+	var contFlag byte
+	if body[0] != 0x17 {
+		contFlag = 0x02 // InterFrame
+	}
+	h.writeData(tag, contFlag)
 	return nil
 }
 
@@ -175,7 +178,7 @@ func (h *handler) OnAudio(timestamp uint32, payload io.Reader) error {
 	}
 
 	tag := makeFLVTag(8, timestamp, body)
-	h.writeData(tag, true)
+	h.writeData(tag, 0x04) // AudioFrame
 	return nil
 }
 
@@ -230,14 +233,14 @@ func (h *handler) rebuildHeader() {
 	}
 }
 
-func (h *handler) writeData(tag []byte, cont bool) {
+func (h *handler) writeData(tag []byte, contFlag byte) {
 	ch := h.ch()
 	if ch == nil {
 		return
 	}
 	pos := h.streamPos
 	h.streamPos += uint32(len(tag))
-	ch.Write(tag, pos, cont)
+	ch.Write(tag, pos, contFlag)
 }
 
 // ---------------------------------------------------------------------------

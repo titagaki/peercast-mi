@@ -36,7 +36,7 @@ func TestContentBuffer_SetHeaderCopies(t *testing.T) {
 // headerPos が最後のパケットの末尾を指すことを確認する。
 func TestContentBuffer_HeaderPosAfterWrite(t *testing.T) {
 	var b ContentBuffer
-	b.Write([]byte{0xAA, 0xBB, 0xCC}, 100, false) // pos=100, len=3 → 次のpos=103
+	b.Write([]byte{0xAA, 0xBB, 0xCC}, 100, 0) // pos=100, len=3 → 次のpos=103
 	b.SetHeader([]byte{0xFF})
 	_, pos := b.Header()
 	if pos != 103 {
@@ -50,7 +50,7 @@ func TestContentBuffer_HasData(t *testing.T) {
 	if b.HasData() {
 		t.Error("HasData: expected false for empty buffer")
 	}
-	b.Write([]byte{0x01}, 0, false)
+	b.Write([]byte{0x01}, 0, 0)
 	if !b.HasData() {
 		t.Error("HasData: expected true after Write")
 	}
@@ -71,9 +71,9 @@ func TestContentBuffer_OldestNewestPos_Empty(t *testing.T) {
 // OldestPos / NewestPos を確認する。
 func TestContentBuffer_OldestNewestPos_FewPackets(t *testing.T) {
 	var b ContentBuffer
-	b.Write([]byte{0x01}, 10, false)
-	b.Write([]byte{0x02}, 20, true)
-	b.Write([]byte{0x03}, 30, true)
+	b.Write([]byte{0x01}, 10, 0)
+	b.Write([]byte{0x02}, 20, 0x02)
+	b.Write([]byte{0x03}, 30, 0x02)
 
 	if got := b.OldestPos(); got != 10 {
 		t.Errorf("OldestPos: got %d, want 10", got)
@@ -89,7 +89,7 @@ func TestContentBuffer_RingOverflow(t *testing.T) {
 	var b ContentBuffer
 	// ContentBufferSize+1 個書き込む。先頭 1 件が追い出される。
 	for i := 0; i < ContentBufferSize+1; i++ {
-		b.Write([]byte{byte(i)}, uint32(i * 10), i > 0)
+		b.Write([]byte{byte(i)}, uint32(i * 10), func() byte { if i > 0 { return 0x02 }; return 0 }())
 	}
 	// インデックス 1 が最古になるはず (インデックス 0 は上書きされた)
 	if got := b.OldestPos(); got != 10 {
@@ -112,9 +112,9 @@ func TestContentBuffer_Since_Empty(t *testing.T) {
 // TestContentBuffer_Since_Basic は基本的な Since の動作を確認する。
 func TestContentBuffer_Since_Basic(t *testing.T) {
 	var b ContentBuffer
-	b.Write([]byte{0x01}, 0, false)
-	b.Write([]byte{0x02}, 10, true)
-	b.Write([]byte{0x03}, 20, true)
+	b.Write([]byte{0x01}, 0, 0)
+	b.Write([]byte{0x02}, 10, 0x02)
+	b.Write([]byte{0x03}, 20, 0x02)
 
 	got := b.Since(10)
 	if len(got) != 2 {
@@ -129,8 +129,8 @@ func TestContentBuffer_Since_Basic(t *testing.T) {
 // 先頭から返すことを確認する。
 func TestContentBuffer_Since_OlderThanOldest(t *testing.T) {
 	var b ContentBuffer
-	b.Write([]byte{0x01}, 100, false)
-	b.Write([]byte{0x02}, 200, true)
+	b.Write([]byte{0x01}, 100, 0)
+	b.Write([]byte{0x02}, 200, 0x02)
 
 	got := b.Since(0)
 	if len(got) != 2 {
@@ -141,8 +141,8 @@ func TestContentBuffer_Since_OlderThanOldest(t *testing.T) {
 // TestContentBuffer_Since_AfterNewest は最新より大きい pos で nil を返すことを確認する。
 func TestContentBuffer_Since_AfterNewest(t *testing.T) {
 	var b ContentBuffer
-	b.Write([]byte{0x01}, 0, false)
-	b.Write([]byte{0x02}, 10, true)
+	b.Write([]byte{0x01}, 0, 0)
+	b.Write([]byte{0x02}, 10, 0x02)
 
 	got := b.Since(100)
 	if got != nil {
@@ -155,7 +155,7 @@ func TestContentBuffer_Since_AfterNewest(t *testing.T) {
 func TestContentBuffer_Since_RingOverflow(t *testing.T) {
 	var b ContentBuffer
 	for i := 0; i < ContentBufferSize+10; i++ {
-		b.Write([]byte{byte(i)}, uint32(i), i > 0)
+		b.Write([]byte{byte(i)}, uint32(i), func() byte { if i > 0 { return 0x02 }; return 0 }())
 	}
 	oldest := b.OldestPos()
 	got := b.Since(oldest)
@@ -169,7 +169,7 @@ func TestContentBuffer_Since_RingOverflow(t *testing.T) {
 func TestContentBuffer_WriteCopies(t *testing.T) {
 	var b ContentBuffer
 	data := []byte{0xAA, 0xBB}
-	b.Write(data, 0, false)
+	b.Write(data, 0, 0)
 	data[0] = 0xFF
 
 	got := b.Since(0)
@@ -189,7 +189,7 @@ func TestContentBuffer_ConcurrentWriteRead(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				b.Write([]byte{byte(n), byte(j)}, uint32(n*100+j), j > 0)
+				b.Write([]byte{byte(n), byte(j)}, uint32(n*100+j), func() byte { if j > 0 { return 0x02 }; return 0 }())
 			}
 		}(i)
 	}

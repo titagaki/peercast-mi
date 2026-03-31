@@ -103,7 +103,7 @@ func (o *HTTPOutputStream) run() {
 		}
 
 		for _, pkt := range packets {
-			if waitingForKeyframe && pkt.Cont {
+			if waitingForKeyframe && pkt.ContFlag != 0 {
 				pos = pkt.Pos + uint32(len(pkt.Data))
 				continue
 			}

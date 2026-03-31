@@ -89,6 +89,12 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 		}
 	}
 
+	// Send HTTP 200 OK before PCP handshake (PeerCastStation 互換).
+	resp := "HTTP/1.0 200 OK\r\nContent-Type: application/x-peercast-pcp\r\n\r\n"
+	if _, err := io.WriteString(o.conn, resp); err != nil {
+		return 0, fmt.Errorf("write HTTP response: %w", err)
+	}
+
 	// Read "pcp\n" magic atom: 4-byte tag + 4-byte length field + 4-byte version payload.
 	// Expected: tag="pcp\n", size=4, version=1 (IPv4) or 100 (IPv6-mapped).
 	pcpMagic := make([]byte, 12)
@@ -104,9 +110,6 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 	}
 
 	// Read helo.
-	pcpConn := &pcp.Conn{}
-	_ = pcpConn // We'll use pcp.ReadAtom directly on the buffered reader.
-
 	heloAtom, err := pcp.ReadAtom(o.br)
 	if err != nil {
 		return 0, fmt.Errorf("read helo: %w", err)
@@ -159,12 +162,6 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 		if p, err := portAtom.GetShort(); err == nil {
 			remotePort = p
 		}
-	}
-
-	// Send HTTP 200 OK first; oleh goes in the response body.
-	resp := "HTTP/1.0 200 OK\r\nContent-Type: application/x-peercast-pcp\r\n\r\n"
-	if _, err := io.WriteString(o.conn, resp); err != nil {
-		return 0, fmt.Errorf("write HTTP response: %w", err)
 	}
 
 	// Send oleh.
@@ -228,21 +225,17 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 
 		if len(packets) > 0 {
 			for _, pkt := range packets {
-				if waitingForKeyframe && pkt.Cont {
+			if waitingForKeyframe && pkt.ContFlag != 0 {
 					pos = pkt.Pos + uint32(len(pkt.Data))
 					continue
 				}
 				waitingForKeyframe = false
 
-				cont := byte(0)
-				if pkt.Cont {
-					cont = 1
-				}
 				pktAtom := pcp.NewParentAtom(pcp.PCPChanPkt,
 					pcp.NewID4Atom(pcp.PCPChanPktType, pcp.NewID4("data")),
 					pcp.NewIntAtom(pcp.PCPChanPktPos, pkt.Pos),
 					pcp.NewBytesAtom(pcp.PCPChanPktData, pkt.Data),
-					pcp.NewByteAtom(pcp.PCPChanPktContinuation, cont),
+					pcp.NewByteAtom(pcp.PCPChanPktContinuation, pkt.ContFlag),
 				)
 				atom := pcp.NewParentAtom(pcp.PCPChan,
 					pcp.NewIDAtom(pcp.PCPChanID, o.ch.ID),

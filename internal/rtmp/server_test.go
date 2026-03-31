@@ -176,8 +176,8 @@ func TestOnVideo_Keyframe(t *testing.T) {
 	if len(packets) != 1 {
 		t.Fatalf("expected 1 packet, got %d", len(packets))
 	}
-	if packets[0].Cont {
-		t.Error("keyframe should have Cont=false")
+	if packets[0].ContFlag != 0 {
+		t.Error("keyframe should have ContFlag=0")
 	}
 }
 
@@ -195,8 +195,8 @@ func TestOnVideo_InterFrame(t *testing.T) {
 	if len(packets) != 1 {
 		t.Fatalf("expected 1 packet, got %d", len(packets))
 	}
-	if !packets[0].Cont {
-		t.Error("inter frame should have Cont=true")
+	if packets[0].ContFlag != 0x02 {
+		t.Errorf("inter frame should have ContFlag=0x02, got 0x%02x", packets[0].ContFlag)
 	}
 }
 
@@ -253,8 +253,8 @@ func TestOnAudio_DataFrame(t *testing.T) {
 	if len(packets) != 1 {
 		t.Fatalf("expected 1 packet, got %d", len(packets))
 	}
-	if !packets[0].Cont {
-		t.Error("audio data should have Cont=true")
+	if packets[0].ContFlag != 0x04 {
+		t.Errorf("audio data should have ContFlag=0x04, got 0x%02x", packets[0].ContFlag)
 	}
 }
 
@@ -315,11 +315,11 @@ func TestWriteData_StreamPosAdvances(t *testing.T) {
 
 	body1 := []byte{0x17, 0x01, 0xAA}
 	tag1 := makeFLVTag(9, 100, body1)
-	h.writeData(tag1, false)
+	h.writeData(tag1, 0)
 
 	body2 := []byte{0x27, 0x01, 0xBB}
 	tag2 := makeFLVTag(9, 200, body2)
-	h.writeData(tag2, true)
+	h.writeData(tag2, 0x02)
 
 	packets := ch.Buffer.Since(0)
 	if len(packets) != 2 {
@@ -340,7 +340,7 @@ func TestWriteData_NoChannel(t *testing.T) {
 
 	tag := makeFLVTag(9, 0, []byte{0x17, 0x01})
 	// Should not panic
-	h.writeData(tag, false)
+	h.writeData(tag, 0)
 }
 
 // -----------------------------------------------------------------------

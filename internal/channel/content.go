@@ -6,9 +6,9 @@ const ContentBufferSize = 64
 
 // Content is a single stream data packet.
 type Content struct {
-	Pos  uint32
-	Data []byte
-	Cont bool // true = continuation (not a keyframe)
+	Pos      uint32
+	Data     []byte
+	ContFlag byte // PeerCastStation 互換ビットフラグ (0x00=None, 0x01=Fragment, 0x02=InterFrame, 0x04=AudioFrame)
 }
 
 // ContentBuffer holds the stream header and a fixed-size ring buffer of data packets.
@@ -71,11 +71,11 @@ func (b *ContentBuffer) SetHeader(data []byte) {
 }
 
 // Write appends a data packet and wakes all goroutines waiting on Signal().
-func (b *ContentBuffer) Write(data []byte, pos uint32, cont bool) {
+func (b *ContentBuffer) Write(data []byte, pos uint32, contFlag byte) {
 	b.mu.Lock()
 	cp := make([]byte, len(data))
 	copy(cp, data)
-	b.packets[b.count%ContentBufferSize] = Content{Pos: pos, Data: cp, Cont: cont}
+	b.packets[b.count%ContentBufferSize] = Content{Pos: pos, Data: cp, ContFlag: contFlag}
 	b.count++
 	b.mu.Unlock()
 	b.notifyWrite()
