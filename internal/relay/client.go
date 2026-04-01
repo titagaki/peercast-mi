@@ -92,8 +92,8 @@ func (c *Client) connect() error {
 	}
 	defer conn.Close()
 
-	// 1. Send HTTP GET /channel/<id>.
-	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\n\r\n", chanIDHex, c.upstreamAddr)
+	// 1. Send HTTP GET /channel/<id> with PCP upgrade header.
+	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: 1\r\n\r\n", chanIDHex, c.upstreamAddr)
 	if _, err := io.WriteString(conn, req); err != nil {
 		return fmt.Errorf("write GET: %w", err)
 	}

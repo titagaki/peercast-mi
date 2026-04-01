@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -24,6 +25,12 @@ type ChannelStore interface {
 	TotalSendRate() int64
 }
 
+// OnDemandRelayFunc is called by the /pls/ handler when a channel is not
+// found locally and a tip address is provided. Implementations should
+// register the channel in the manager and start a relay client.
+// If the channel is already active, implementations should return nil.
+type OnDemandRelayFunc func(channelID pcp.GnuID, upstreamAddr string) error
+
 // Listener accepts incoming connections on the PeerCast port and dispatches them
 // to the appropriate output stream handler.
 type Listener struct {
@@ -36,7 +43,8 @@ type Listener struct {
 	maxUpstreamKbps int // 0 = unlimited (global, kbps)
 	listener        net.Listener
 	nextConnID      atomic.Int64
-	apiHandler      http.Handler // JSON-RPC handler for POST /api/; may be nil
+	apiHandler      http.Handler      // JSON-RPC handler for POST /api/; may be nil
+	OnDemandRelay   OnDemandRelayFunc // optional: auto-start relay on /pls/ request
 }
 
 // NewListener creates a new Listener.
@@ -114,6 +122,8 @@ func (l *Listener) handle(conn net.Conn) {
 		l.handlePCPRelay(cc, br, peek)
 	case startsWith(peek, "GET /stream/"):
 		l.handleHTTPStream(cc, br, peek)
+	case startsWith(peek, "GET /pls/"):
+		l.handlePLS(cc, br, peek)
 	case startsWith(peek, "pcp\n"):
 		slog.Debug("servent: ping", "remote", conn.RemoteAddr())
 		handlePing(conn, br, l.sessionID)
@@ -125,7 +135,7 @@ func (l *Listener) handle(conn net.Conn) {
 		}
 
 	default:
-		slog.Warn("servent: unknown protocol", "remote", conn.RemoteAddr())
+		slog.Warn("servent: unknown protocol", "remote", conn.RemoteAddr(), "peek", string(peek))
 		conn.Close()
 	}
 }
@@ -163,6 +173,63 @@ func (l *Listener) handlePCPRelay(cc *countingConn, br *bufio.Reader, peek []byt
 	slog.Info("pcp: relay connected", "remote", cc.RemoteAddr(), "id", id)
 	h.run()
 	ch.RemoveOutput(h)
+}
+
+func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader, _ []byte) {
+	defer cc.Close()
+
+	req, err := http.ReadRequest(br)
+	if err != nil {
+		return
+	}
+	defer req.Body.Close()
+
+	const prefix = "/pls/"
+	path := req.URL.Path
+	if len(path) < len(prefix)+32 {
+		io.WriteString(cc, "HTTP/1.0 400 Bad Request\r\n\r\n")
+		return
+	}
+	b, err := hex.DecodeString(path[len(prefix) : len(prefix)+32])
+	if err != nil || len(b) != 16 {
+		io.WriteString(cc, "HTTP/1.0 400 Bad Request\r\n\r\n")
+		return
+	}
+	var channelID pcp.GnuID
+	copy(channelID[:], b)
+
+	ch, ok := l.mgr.GetByID(channelID)
+	if !ok && l.OnDemandRelay != nil {
+		tip := req.URL.Query().Get("tip")
+		if tip != "" {
+			if relayErr := l.OnDemandRelay(channelID, tip); relayErr != nil {
+				slog.Warn("pls: auto-relay failed", "remote", cc.RemoteAddr(), "err", relayErr)
+			} else {
+				ch, ok = l.mgr.GetByID(channelID)
+			}
+		}
+	}
+	if !ok {
+		slog.Info("pls: channel not found", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
+		io.WriteString(cc, "HTTP/1.0 404 Not Found\r\n\r\n")
+		return
+	}
+
+	streamURL := fmt.Sprintf("http://localhost:%d/stream/%s", l.port, hex.EncodeToString(channelID[:]))
+	name := ch.Info().Name
+	if name == "" {
+		name = hex.EncodeToString(channelID[:])
+	}
+	body := fmt.Sprintf("#EXTM3U\n#EXTINF:-1,%s\n%s\n", name, streamURL)
+
+	var sb strings.Builder
+	sb.WriteString("HTTP/1.0 200 OK\r\n")
+	sb.WriteString("Content-Type: audio/x-mpegurl\r\n")
+	sb.WriteString(fmt.Sprintf("Content-Length: %d\r\n", len(body)))
+	sb.WriteString("\r\n")
+	sb.WriteString(body)
+	io.WriteString(cc, sb.String())
+	slog.Info("pls: sent playlist", "remote", cc.RemoteAddr(), "channel", name)
 }
 
 func (l *Listener) handleHTTPStream(cc *countingConn, br *bufio.Reader, peek []byte) {

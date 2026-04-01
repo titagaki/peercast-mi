@@ -54,8 +54,16 @@ func (o *HTTPOutputStream) run() {
 	_ = req.Body.Close()
 
 	if !o.ch.Buffer.HasData() {
-		io.WriteString(o.conn, "HTTP/1.0 503 Service Unavailable\r\n\r\n")
-		return
+		// Wait for the first data packet (e.g. while a relay is being established).
+		select {
+		case <-o.ch.Buffer.Signal():
+			// data arrived
+		case <-o.closeCh:
+			return
+		case <-time.After(30 * time.Second):
+			io.WriteString(o.conn, "HTTP/1.0 503 Service Unavailable\r\n\r\n")
+			return
+		}
 	}
 
 	info := o.ch.Info()

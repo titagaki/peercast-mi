@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"log/slog"
 	"os"
@@ -9,10 +10,13 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/titagaki/peercast-pcp/pcp"
+
 	"github.com/titagaki/peercast-mi/internal/channel"
 	"github.com/titagaki/peercast-mi/internal/config"
 	"github.com/titagaki/peercast-mi/internal/id"
 	"github.com/titagaki/peercast-mi/internal/jsonrpc"
+	"github.com/titagaki/peercast-mi/internal/relay"
 	"github.com/titagaki/peercast-mi/internal/rtmp"
 	"github.com/titagaki/peercast-mi/internal/servent"
 	"github.com/titagaki/peercast-mi/internal/yp"
@@ -84,6 +88,21 @@ func main() {
 			ypClient.Run()
 		}()
 		defer ypClient.Stop()
+	}
+
+	// Wire on-demand relay: auto-start relay when /pls/ is requested with a tip.
+	listener.OnDemandRelay = func(channelID pcp.GnuID, upstreamAddr string) error {
+		if _, ok := mgr.GetByID(channelID); ok {
+			return nil // already relaying
+		}
+		ch := channel.New(channelID, pcp.GnuID{}, 0)
+		ch.SetSource(upstreamAddr)
+		ch.SetUpstreamAddr(upstreamAddr)
+		client := relay.New(upstreamAddr, channelID, sessionID, ch)
+		mgr.AddRelayChannel(ch, client)
+		go client.Run()
+		slog.Info("pls: auto-relay started", "addr", upstreamAddr, "channel", hex.EncodeToString(channelID[:]))
+		return nil
 	}
 
 	// Wire JSON-RPC API handler into the listener.
