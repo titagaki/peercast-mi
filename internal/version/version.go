@@ -13,7 +13,7 @@ const PCPVersionVP = 27
 const AgentName = "peercast-mi/" + Version
 
 // ExPrefix is the 2-byte version extension prefix sent in PCP host atoms.
-const ExPrefix = "MM"
+const ExPrefix = "MI"
 
 // ExNumber converts a "major.minor.patch" version string to a 3-digit integer.
 // e.g. "0.0.1" → 1, "1.2.3" → 123.
