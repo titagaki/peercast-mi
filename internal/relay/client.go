@@ -167,9 +167,6 @@ func (c *Client) connect() ([]string, error) {
 	return c.receiveLoop(conn, br)
 }
 
-// pcpHostFlagsRelay is the flag bit in PCPHostFlags1 indicating a node can relay.
-const pcpHostFlagsRelay = byte(0x02)
-
 func (c *Client) receiveLoop(conn net.Conn, br *bufio.Reader) ([]string, error) {
 	var hitHosts []string
 	for {
@@ -205,23 +202,45 @@ func (c *Client) receiveLoop(conn net.Conn, br *bufio.Reader) ([]string, error) 
 	}
 }
 
+const (
+	// pcpHostFlagsRelay is set when the node can forward the stream.
+	pcpHostFlagsRelay = byte(0x02)
+	// pcpHostFlagsPush is set when the node is firewalled and needs a GIV
+	// (push) to accept incoming connections. peercast-mi does not implement
+	// GIV, so these nodes are skipped.
+	pcpHostFlagsPush = byte(0x08)
+)
+
 // parseRelayHost extracts a "host:port" string from a PCPHost atom.
-// Returns "" if the host does not advertise relay capability or lacks an address.
+//
+// A PCPHost atom contains TWO consecutive IP/port pairs: rhost[0] is the
+// external (public) address, rhost[1] is the internal (local) address.
+// We return the first non-unspecified, non-loopback address found.
+//
+// Returns "" when the host cannot be used (firewalled / no relay flag /
+// no valid address).
 func parseRelayHost(atom *pcp.Atom) string {
-	var ipInt uint32
-	var port uint16
+	// Collect up to two IP/port pairs in order.
+	var ips [2]uint32
+	var ports [2]uint16
+	ipIdx, portIdx := 0, 0
 	var flags byte
-	hasIP := false
+
 	for _, child := range atom.Children() {
 		switch child.Tag {
 		case pcp.PCPHostIP:
-			if v, err := child.GetInt(); err == nil {
-				ipInt = v
-				hasIP = true
+			if ipIdx < 2 {
+				if v, err := child.GetInt(); err == nil {
+					ips[ipIdx] = v
+					ipIdx++
+				}
 			}
 		case pcp.PCPHostPort:
-			if v, err := child.GetShort(); err == nil {
-				port = v
+			if portIdx < 2 {
+				if v, err := child.GetShort(); err == nil {
+					ports[portIdx] = v
+					portIdx++
+				}
 			}
 		case pcp.PCPHostFlags1:
 			if v, err := child.GetByte(); err == nil {
@@ -229,13 +248,29 @@ func parseRelayHost(atom *pcp.Atom) string {
 			}
 		}
 	}
-	if !hasIP || port == 0 || (flags&pcpHostFlagsRelay) == 0 {
+
+	// Skip firewalled nodes (PUSH flag) -- they require GIV which is not implemented.
+	if flags&pcpHostFlagsPush != 0 {
 		return ""
 	}
-	// PCP stores IPv4 in network byte order via writeInt (little-endian on wire),
-	// so GetInt() restores the big-endian value, which we write back as big-endian.
-	ip := net.IP(binary.BigEndian.AppendUint32(nil, ipInt))
-	return fmt.Sprintf("%s:%d", ip, port)
+	if flags&pcpHostFlagsRelay == 0 {
+		return ""
+	}
+
+	// Try each IP/port pair in order; return the first usable address.
+	// PCP stores IPv4 via writeInt (little-endian on wire), so GetInt() gives
+	// the big-endian (network-byte-order) value -- restore it with BigEndian.
+	for i := 0; i < 2; i++ {
+		if ports[i] == 0 {
+			continue
+		}
+		ip := net.IP(binary.BigEndian.AppendUint32(nil, ips[i]))
+		if ip.IsUnspecified() || ip.IsLoopback() {
+			continue
+		}
+		return fmt.Sprintf("%s:%d", ip, ports[i])
+	}
+	return ""
 }
 
 func (c *Client) handleChan(atom *pcp.Atom) {
