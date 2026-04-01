@@ -38,6 +38,10 @@ type Client struct {
 
 	globalIP uint32 // learned from oleh.rip
 
+	// OnGlobalIP is called with the global IP address learned from the YP oleh.
+	// May be nil.
+	OnGlobalIP func(uint32)
+
 	stopCh   chan struct{}
 	bumpCh   chan struct{}
 	doneCh   chan struct{}
@@ -226,6 +230,9 @@ func (c *Client) handleOleh(a *pcp.Atom) {
 		if v, err := rip.GetInt(); err == nil {
 			c.globalIP = v
 			slog.Debug("yp: oleh received", "addr", c.addr, "global_ip", ipToString(v))
+			if c.OnGlobalIP != nil {
+				c.OnGlobalIP(v)
+			}
 		}
 	}
 }

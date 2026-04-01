@@ -24,19 +24,23 @@ const (
 // PCPOutputStream sends PCP stream data to a downstream relay node.
 type PCPOutputStream struct {
 	outputBase
-	br        *bufio.Reader
-	sessionID pcp.GnuID
-	ch        *channel.Channel
-	bcstCh    chan *pcp.Atom
+	br         *bufio.Reader
+	sessionID  pcp.GnuID
+	ch         *channel.Channel
+	bcstCh     chan *pcp.Atom
+	globalIP   uint32
+	listenPort uint16
 }
 
-func newPCPOutputStream(conn *countingConn, br *bufio.Reader, sessionID pcp.GnuID, ch *channel.Channel, id int) *PCPOutputStream {
+func newPCPOutputStream(conn *countingConn, br *bufio.Reader, sessionID pcp.GnuID, ch *channel.Channel, id int, globalIP uint32, listenPort uint16) *PCPOutputStream {
 	o := &PCPOutputStream{
 		outputBase: newOutputBase(conn, id),
 		br:         br,
 		sessionID:  sessionID,
 		ch:         ch,
 		bcstCh:     make(chan *pcp.Atom, 8),
+		globalIP:   globalIP,
+		listenPort: listenPort,
 	}
 	o.onClose = func() { conn.Close() }
 	return o
@@ -179,17 +183,53 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 	return startPos, nil
 }
 
-// sendInitial sends chan > info, trck, and the head pkt.
+// sendInitial sends chan (info, trck, head pkt) and host atoms.
 func (o *PCPOutputStream) sendInitial() error {
 	info := o.ch.Info()
 	track := o.ch.Track()
 	header, headerPos := o.ch.Buffer.Header()
 
 	chanAtom := buildChanAtom(o.ch.ID, o.ch.BroadcastID(), info, track, header, headerPos)
+	hostAtom := o.buildHostAtom()
+
 	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
-	err := chanAtom.Write(o.conn)
+	if err := chanAtom.Write(o.conn); err != nil {
+		o.conn.SetWriteDeadline(time.Time{})
+		return err
+	}
+	err := hostAtom.Write(o.conn)
 	o.conn.SetWriteDeadline(time.Time{})
 	return err
+}
+
+func (o *PCPOutputStream) buildHostAtom() *pcp.Atom {
+	buf := o.ch.Buffer
+	flags := byte(pcp.PCPHostFlags1Relay | pcp.PCPHostFlags1CIN)
+	if o.globalIP != 0 {
+		flags |= pcp.PCPHostFlags1Direct
+	}
+	if o.ch.IsBroadcasting() {
+		flags |= pcp.PCPHostFlags1Tracker
+	}
+	if o.ch.UpstreamAddr() != "" {
+		flags |= pcp.PCPHostFlags1Recv
+	}
+	return pcp.NewParentAtom(pcp.PCPHost,
+		pcp.NewIDAtom(pcp.PCPHostID, o.sessionID),
+		pcp.NewIntAtom(pcp.PCPHostIP, o.globalIP),
+		pcp.NewShortAtom(pcp.PCPHostPort, o.listenPort),
+		pcp.NewIntAtom(pcp.PCPHostNumListeners, uint32(o.ch.NumListeners())),
+		pcp.NewIntAtom(pcp.PCPHostNumRelays, uint32(o.ch.NumRelays())),
+		pcp.NewIntAtom(pcp.PCPHostUptime, o.ch.UptimeSeconds()),
+		pcp.NewIntAtom(pcp.PCPHostOldPos, buf.OldestPos()),
+		pcp.NewIntAtom(pcp.PCPHostNewPos, buf.NewestPos()),
+		pcp.NewIDAtom(pcp.PCPHostChanID, o.ch.ID),
+		pcp.NewByteAtom(pcp.PCPHostFlags1, flags),
+		pcp.NewIntAtom(pcp.PCPHostVersion, version.PCPVersion),
+		pcp.NewIntAtom(pcp.PCPHostVersionVP, version.PCPVersionVP),
+		pcp.NewBytesAtom(pcp.PCPHostVersionExPrefix, []byte(version.ExPrefix)),
+		pcp.NewShortAtom(pcp.PCPHostVersionExNumber, version.ExNumber()),
+	)
 }
 
 // streamLoop continuously sends buffered content packets to the peer.

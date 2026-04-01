@@ -82,6 +82,7 @@ func main() {
 			os.Exit(1)
 		}
 		ypClient := yp.New(hostPort, sessionID, broadcastID, mgr, cfg.PeercastPort)
+		ypClient.OnGlobalIP = listener.SetGlobalIP
 		ypBumper = ypClient
 		go func() {
 			slog.Info("yp: connecting", "addr", ypEntry.Addr, "name", ypEntry.Name)

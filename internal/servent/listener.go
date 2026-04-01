@@ -41,6 +41,7 @@ type Listener struct {
 	maxRelaysTotal  int // 0 = unlimited (global)
 	maxListeners    int // 0 = unlimited (per-channel)
 	maxUpstreamKbps int // 0 = unlimited (global, kbps)
+	globalIP        atomic.Uint32 // learned from YP oleh
 	listener        net.Listener
 	nextConnID      atomic.Int64
 	apiHandler      http.Handler      // JSON-RPC handler for POST /api/; may be nil
@@ -96,6 +97,12 @@ func (l *Listener) ListenAndServe() error {
 		return err
 	}
 	return l.Serve()
+}
+
+// SetGlobalIP updates the global IP address reported in PCPHost atoms.
+// It is called with the IP learned from the YP oleh.
+func (l *Listener) SetGlobalIP(ip uint32) {
+	l.globalIP.Store(ip)
 }
 
 // Close shuts down the listener.
@@ -164,7 +171,7 @@ func (l *Listener) handlePCPRelay(cc *countingConn, br *bufio.Reader, peek []byt
 		return
 	}
 	id := int(l.nextConnID.Add(1))
-	h := newPCPOutputStream(cc, br, l.sessionID, ch, id)
+	h := newPCPOutputStream(cc, br, l.sessionID, ch, id, l.globalIP.Load(), uint16(l.port))
 	if !ch.TryAddOutput(h, l.maxRelays, l.maxListeners) {
 		slog.Info("pcp: relay rejected (relay full)", "remote", cc.RemoteAddr())
 		cc.Close()
