@@ -93,7 +93,7 @@ func (c *Client) connect() error {
 	defer conn.Close()
 
 	// 1. Send HTTP GET /channel/<id> with PCP upgrade header.
-	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: 1\r\n\r\n", chanIDHex, c.upstreamAddr)
+	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: 1\r\nx-peercast-pos: 0\r\n\r\n", chanIDHex, c.upstreamAddr)
 	if _, err := io.WriteString(conn, req); err != nil {
 		return fmt.Errorf("write GET: %w", err)
 	}
@@ -124,7 +124,7 @@ func (c *Client) connect() error {
 	if err != nil {
 		return fmt.Errorf("read HTTP response: %w", err)
 	}
-	if statusCode != 200 {
+	if statusCode != 200 && statusCode != 503 {
 		return fmt.Errorf("upstream returned HTTP %d", statusCode)
 	}
 
