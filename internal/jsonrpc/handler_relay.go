@@ -58,7 +58,7 @@ func (s *Server) relayChannel(params json.RawMessage) (interface{}, *rpcError) {
 	ch := channel.New(chanID, pcp.GnuID{}, 0)
 	ch.SetSource(upstreamAddr)
 	ch.SetUpstreamAddr(upstreamAddr)
-	client := relay.New(upstreamAddr, chanID, s.sessionID, ch)
+	client := relay.New(upstreamAddr, chanID, s.sessionID, uint16(s.cfg.PeercastPort), ch)
 	s.mgr.AddRelayChannel(ch, client)
 	go client.Run()
 

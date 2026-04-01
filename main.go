@@ -98,7 +98,7 @@ func main() {
 		ch := channel.New(channelID, pcp.GnuID{}, 0)
 		ch.SetSource(upstreamAddr)
 		ch.SetUpstreamAddr(upstreamAddr)
-		client := relay.New(upstreamAddr, channelID, sessionID, ch)
+		client := relay.New(upstreamAddr, channelID, sessionID, uint16(cfg.PeercastPort), ch)
 		mgr.AddRelayChannel(ch, client)
 		go client.Run()
 		slog.Info("pls: auto-relay started", "addr", upstreamAddr, "channel", hex.EncodeToString(channelID[:]))

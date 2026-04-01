@@ -37,6 +37,7 @@ type Client struct {
 	upstreamAddr string
 	channelID    pcp.GnuID
 	sessionID    pcp.GnuID
+	listenPort   uint16
 	ch           *channel.Channel
 
 	stopCh   chan struct{}
@@ -45,11 +46,12 @@ type Client struct {
 }
 
 // New creates a new relay Client.
-func New(upstreamAddr string, channelID, sessionID pcp.GnuID, ch *channel.Channel) *Client {
+func New(upstreamAddr string, channelID, sessionID pcp.GnuID, listenPort uint16, ch *channel.Channel) *Client {
 	return &Client{
 		upstreamAddr: upstreamAddr,
 		channelID:    channelID,
 		sessionID:    sessionID,
+		listenPort:   listenPort,
 		ch:           ch,
 		stopCh:       make(chan struct{}),
 		doneCh:       make(chan struct{}),
@@ -136,6 +138,7 @@ func (c *Client) connect() ([]string, error) {
 		pcp.NewStringAtom(pcp.PCPHeloAgent, version.AgentName),
 		pcp.NewIDAtom(pcp.PCPHeloSessionID, c.sessionID),
 		pcp.NewIntAtom(pcp.PCPHeloVersion, version.PCPVersion),
+		pcp.NewShortAtom(pcp.PCPHeloPort, c.listenPort),
 	)
 	if err := helo.Write(conn); err != nil {
 		return nil, fmt.Errorf("write helo: %w", err)
