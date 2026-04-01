@@ -204,15 +204,12 @@ func (o *PCPOutputStream) sendInitial() error {
 
 func (o *PCPOutputStream) buildHostAtom() *pcp.Atom {
 	buf := o.ch.Buffer
-	flags := byte(pcp.PCPHostFlags1Relay | pcp.PCPHostFlags1CIN)
+	flags := byte(pcp.PCPHostFlags1Relay | pcp.PCPHostFlags1Recv | pcp.PCPHostFlags1CIN)
 	if o.globalIP != 0 {
 		flags |= pcp.PCPHostFlags1Direct
 	}
 	if o.ch.IsBroadcasting() {
 		flags |= pcp.PCPHostFlags1Tracker
-	}
-	if o.ch.UpstreamAddr() != "" {
-		flags |= pcp.PCPHostFlags1Recv
 	}
 	return pcp.NewParentAtom(pcp.PCPHost,
 		pcp.NewIDAtom(pcp.PCPHostID, o.sessionID),
