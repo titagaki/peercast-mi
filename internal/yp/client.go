@@ -62,8 +62,12 @@ func New(addr string, sessionID, broadcastID pcp.GnuID, mgr ChannelLister, liste
 }
 
 // Run connects to the YP and runs the bcst loop, reconnecting on failure.
+// It waits until at least one broadcasting channel exists before connecting.
 func (c *Client) Run() {
 	defer close(c.doneCh)
+	if !c.waitForBroadcast() {
+		return
+	}
 	delay := retryInitial
 	for {
 		connected, err := c.run()
@@ -83,6 +87,26 @@ func (c *Client) Run() {
 		delay *= 2
 		if delay > retryMax {
 			delay = retryMax
+		}
+	}
+}
+
+// waitForBroadcast blocks until there is at least one broadcasting channel,
+// or until the client is stopped. Returns false if stopped before any channel appeared.
+func (c *Client) waitForBroadcast() bool {
+	for {
+		for _, ch := range c.mgr.List() {
+			if ch.IsBroadcasting() {
+				return true
+			}
+		}
+		select {
+		case <-c.stopCh:
+			return false
+		case <-c.bumpCh:
+			// re-check immediately
+		case <-time.After(time.Second):
+			// poll
 		}
 	}
 }

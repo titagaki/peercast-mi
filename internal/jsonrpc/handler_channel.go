@@ -197,6 +197,10 @@ func (s *Server) broadcastChannel(params json.RawMessage) (interface{}, *rpcErro
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: err.Error()}
 	}
 
+	if s.ypClient != nil {
+		s.ypClient.Bump()
+	}
+
 	return map[string]string{"channelId": gnuIDString(ch.ID)}, nil
 }
 
