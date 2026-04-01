@@ -9,9 +9,9 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
-	"github.com/titagaki/peercast-mm/internal/channel"
-	"github.com/titagaki/peercast-mm/internal/relay"
-	"github.com/titagaki/peercast-mm/internal/version"
+	"github.com/titagaki/peercast-mi/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/relay"
+	"github.com/titagaki/peercast-mi/internal/version"
 )
 
 // ---------------------------------------------------------------------------

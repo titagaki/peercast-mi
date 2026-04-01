@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/titagaki/peercast-mm/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/channel"
 )
 
 // ---------------------------------------------------------------------------

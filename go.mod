@@ -1,4 +1,4 @@
-module github.com/titagaki/peercast-mm
+module github.com/titagaki/peercast-mi
 
 go 1.25.0
 

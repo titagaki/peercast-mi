@@ -10,7 +10,7 @@ const PCPVersion = 1218
 // PCPVersionVP is the VP extension version number used in host atoms.
 const PCPVersionVP = 27
 
-const AgentName = "peercast-mm/" + Version
+const AgentName = "peercast-mi/" + Version
 
 // ExPrefix is the 2-byte version extension prefix sent in PCP host atoms.
 const ExPrefix = "MM"

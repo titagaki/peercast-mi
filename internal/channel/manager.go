@@ -8,7 +8,7 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
-	"github.com/titagaki/peercast-mm/internal/id"
+	"github.com/titagaki/peercast-mi/internal/id"
 )
 
 // RelayHandle is implemented by relay.Client. Using an interface here avoids

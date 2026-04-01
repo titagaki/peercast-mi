@@ -8,8 +8,8 @@ import (
 
 	"github.com/yutopp/go-rtmp/message"
 
-	"github.com/titagaki/peercast-mm/internal/channel"
-	"github.com/titagaki/peercast-mm/internal/id"
+	"github.com/titagaki/peercast-mi/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/id"
 )
 
 // helpers ---------------------------------------------------------------

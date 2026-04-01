@@ -8,13 +8,13 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/titagaki/peercast-mm/internal/channel"
-	"github.com/titagaki/peercast-mm/internal/config"
-	"github.com/titagaki/peercast-mm/internal/id"
-	"github.com/titagaki/peercast-mm/internal/jsonrpc"
-	"github.com/titagaki/peercast-mm/internal/rtmp"
-	"github.com/titagaki/peercast-mm/internal/servent"
-	"github.com/titagaki/peercast-mm/internal/yp"
+	"github.com/titagaki/peercast-mi/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/config"
+	"github.com/titagaki/peercast-mi/internal/id"
+	"github.com/titagaki/peercast-mi/internal/jsonrpc"
+	"github.com/titagaki/peercast-mi/internal/rtmp"
+	"github.com/titagaki/peercast-mi/internal/servent"
+	"github.com/titagaki/peercast-mi/internal/yp"
 )
 
 func main() {

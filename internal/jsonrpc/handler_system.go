@@ -1,6 +1,6 @@
 package jsonrpc
 
-import "github.com/titagaki/peercast-mm/internal/version"
+import "github.com/titagaki/peercast-mi/internal/version"
 
 func (s *Server) getVersionInfo() (interface{}, *rpcError) {
 	return map[string]string{"agentName": version.AgentName}, nil

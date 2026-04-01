@@ -9,8 +9,8 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
-	"github.com/titagaki/peercast-mm/internal/channel"
-	"github.com/titagaki/peercast-mm/internal/config"
+	"github.com/titagaki/peercast-mi/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/config"
 )
 
 // YPBumper is the subset of yp.Client that the JSON-RPC server needs.

@@ -1,6 +1,6 @@
 # JSON-RPC API 仕様
 
-peercast-mm が提供する JSON-RPC 2.0 API の実装仕様。
+peercast-mi が提供する JSON-RPC 2.0 API の実装仕様。
 
 実装: `internal/jsonrpc/server.go`
 
@@ -178,7 +178,7 @@ ChannelID は入力パラメータから決定論的に生成される。同じ 
 
 **返却値:**
 ```json
-{ "agentName": "peercast-mm/0.0.1" }
+{ "agentName": "peercast-mi/0.0.1" }
 ```
 
 ---
@@ -444,7 +444,7 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
     "isReceiving": true,
     "isControlFull": false,
     "version": 1218,
-    "versionString": "peercast-mm/0.0.1",
+    "versionString": "peercast-mi/0.0.1",
     "children": []
   }
 ]

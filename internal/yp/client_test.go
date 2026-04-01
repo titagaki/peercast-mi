@@ -8,9 +8,9 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
-	"github.com/titagaki/peercast-mm/internal/channel"
-	"github.com/titagaki/peercast-mm/internal/id"
-	"github.com/titagaki/peercast-mm/internal/version"
+	"github.com/titagaki/peercast-mi/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/id"
+	"github.com/titagaki/peercast-mi/internal/version"
 )
 
 // fakeYP simulates a YP server on one side of a net.Pipe.

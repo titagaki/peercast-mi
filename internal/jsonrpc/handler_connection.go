@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/titagaki/peercast-mm/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/channel"
 )
 
 type connEntry struct {

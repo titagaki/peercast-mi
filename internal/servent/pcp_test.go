@@ -7,7 +7,7 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
-	"github.com/titagaki/peercast-mm/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/channel"
 )
 
 // newTestOutputStream は net.Pipe を使って PCPOutputStream とピア接続を返す。

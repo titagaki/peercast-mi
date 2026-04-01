@@ -1,4 +1,4 @@
-# peercast-mm 実装仕様
+# peercast-mi 実装仕様
 
 Go 製 PeerCast ノードの実装仕様。ブロードキャストノード（RTMP → PCP 配信）とリレーノード（上流 PCP ノードから受け取って中継）の両方に対応する。
 
@@ -319,7 +319,7 @@ peercast-yt (`gnuid.cpp:24`, `servhs.cpp:2440`) と互換の XOR ベースアル
 
 - 入力: `BroadcastID`, `Name`, `Genre`, `Bitrate(uint8)`
 - SHA512+MD5 方式は非互換のため不採用
-- peercast-yt の `randomizeBroadcastingChannelID` フラグは peercast-mm では実装しない
+- peercast-yt の `randomizeBroadcastingChannelID` フラグは peercast-mi では実装しない
 
 ---
 
@@ -335,7 +335,7 @@ peercast-yt (`gnuid.cpp:24`, `servhs.cpp:2440`) と互換の XOR ベースアル
 ### 10.3 push 接続 (firewalled ノード向け)
 
 peercast-yt の GIV プロトコルは「firewalled リレーノードへのアウトバウンド接続」であり、**対象外**。
-peercast-mm はブロードキャストノード専用で、下流ノードは常に peercast-mm 側に接続してくる。
+peercast-mi はブロードキャストノード専用で、下流ノードは常に peercast-mi 側に接続してくる。
 
 ---
 

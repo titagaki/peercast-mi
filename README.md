@@ -1,4 +1,4 @@
-# peercast-mm
+# peercast-mi
 
 Go 製 PeerCast ノード。**ブロードキャストノード**（RTMP → PCP）と**リレーノード**（上流 PeerCast ノードから受け取って中継）の両方に対応する。
 
@@ -12,9 +12,9 @@ Go 製 PeerCast ノード。**ブロードキャストノード**（RTMP → PCP
 ## インストール
 
 ```sh
-git clone https://github.com/titagaki/peercast-mm.git
-cd peercast-mm
-go build -o peercast-mm .
+git clone https://github.com/titagaki/peercast-mi.git
+cd peercast-mi
+go build -o peercast-mi .
 ```
 
 ## 起動
@@ -22,7 +22,7 @@ go build -o peercast-mm .
 あらかじめ `config.toml` で YP とポートを設定しておく。
 
 ```sh
-./peercast-mm
+./peercast-mi
 ```
 
 ### オプション
@@ -71,7 +71,7 @@ addr = "pcp://localhost:7144/"
 ログは標準エラー出力 (stderr) に出力される。ファイルに保存したい場合はリダイレクトする。
 
 ```sh
-./peercast-mm 2>> peercast.log
+./peercast-mi 2>> peercast.log
 ```
 
 ## チャンネルの作成と配信
@@ -161,7 +161,7 @@ curl -s -X POST http://localhost:7144/api/1 \
 
 ## 視聴・リレー
 
-peercast-mm はポート 7144 で待ち受ける。
+peercast-mi はポート 7144 で待ち受ける。
 
 | URL | 用途 |
 |---|---|

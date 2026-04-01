@@ -7,7 +7,7 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
-	"github.com/titagaki/peercast-mm/internal/version"
+	"github.com/titagaki/peercast-mi/internal/version"
 )
 
 // writePCPMagic は "pcp\n" ハンドシェイク冒頭の 12 バイト (tag+length+version) を書き込む。

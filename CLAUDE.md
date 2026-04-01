@@ -1,4 +1,4 @@
-# peercast-mm
+# peercast-mi
 
 Go 製 PeerCast ノード。ブロードキャストノード（RTMP → PCP 配信）とリレーノード（上流から受け取って中継）の両方に対応する。
 

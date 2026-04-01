@@ -14,7 +14,7 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
-	"github.com/titagaki/peercast-mm/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/channel"
 )
 
 // ChannelManager is the subset of channel.Manager that the RTMP server needs.
