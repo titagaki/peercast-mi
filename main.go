@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -44,6 +45,7 @@ func main() {
 
 	sessionID := id.NewRandom()
 	broadcastID := id.NewRandom()
+	var globalIP atomic.Uint32
 
 	slog.Info("startup", "session_id", sessionID, "broadcast_id", broadcastID)
 
@@ -82,7 +84,10 @@ func main() {
 			os.Exit(1)
 		}
 		ypClient := yp.New(hostPort, sessionID, broadcastID, mgr, cfg.PeercastPort)
-		ypClient.OnGlobalIP = listener.SetGlobalIP
+		ypClient.OnGlobalIP = func(ip uint32) {
+			globalIP.Store(ip)
+			listener.SetGlobalIP(ip)
+		}
 		ypBumper = ypClient
 		go func() {
 			slog.Info("yp: connecting", "addr", ypEntry.Addr, "name", ypEntry.Name)
@@ -100,6 +105,7 @@ func main() {
 		ch.SetSource(upstreamAddr)
 		ch.SetUpstreamAddr(upstreamAddr)
 		client := relay.New(upstreamAddr, channelID, sessionID, uint16(cfg.PeercastPort), ch)
+		client.SetGlobalIP(globalIP.Load())
 		mgr.AddRelayChannel(ch, client)
 		go client.Run()
 		slog.Info("pls: auto-relay started", "addr", upstreamAddr, "channel", hex.EncodeToString(channelID[:]))

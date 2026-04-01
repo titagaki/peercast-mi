@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -31,6 +32,11 @@ var (
 	pktTypeData = pcp.NewID4("data")
 )
 
+const (
+	bcstInterval     = 30 * time.Second
+	bcstWriteTimeout = 10 * time.Second
+)
+
 // Client connects to an upstream PeerCast node and writes the received stream
 // into a local channel, reconnecting on failure.
 type Client struct {
@@ -40,9 +46,16 @@ type Client struct {
 	listenPort   uint16
 	ch           *channel.Channel
 
+	globalIP atomic.Uint32 // learned from YP oleh
+
 	stopCh   chan struct{}
 	doneCh   chan struct{}
 	stopOnce sync.Once
+}
+
+// SetGlobalIP updates the global IP address reported in BCST HOST atoms.
+func (c *Client) SetGlobalIP(ip uint32) {
+	c.globalIP.Store(ip)
 }
 
 // New creates a new relay Client.
@@ -166,7 +179,13 @@ func (c *Client) connect() ([]string, error) {
 
 	slog.Info("relay: connected", "addr", c.upstreamAddr, "channel", chanIDHex)
 
-	// 5. Receive loop. Returns any relay host hints from PCPHost atoms.
+	// 5. Send periodic BCST HOST atoms upstream so intermediate nodes can
+	// populate their relay tree with peercast-mi's version info.
+	bcstStop := make(chan struct{})
+	go c.bcstHostLoop(conn, bcstStop)
+	defer close(bcstStop)
+
+	// 6. Receive loop. Returns any relay host hints from PCPHost atoms.
 	return c.receiveLoop(conn, br)
 }
 
@@ -373,6 +392,79 @@ func parseChanTrack(a *pcp.Atom) channel.TrackInfo {
 		}
 	}
 	return track
+}
+
+// bcstHostLoop sends BCST HOST atoms upstream periodically so that
+// intermediate nodes can build the relay tree with peercast-mi's version info.
+func (c *Client) bcstHostLoop(conn net.Conn, stop <-chan struct{}) {
+	uphostIP, uphostPort := connRemoteIPPort(conn)
+	c.writeBcstHost(conn, uphostIP, uphostPort)
+	t := time.NewTicker(bcstInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			c.writeBcstHost(conn, uphostIP, uphostPort)
+		}
+	}
+}
+
+func (c *Client) writeBcstHost(conn net.Conn, uphostIP uint32, uphostPort uint16) {
+	atom := c.buildRelayBcstAtom(uphostIP, uphostPort)
+	conn.SetWriteDeadline(time.Now().Add(bcstWriteTimeout))
+	atom.Write(conn)
+	conn.SetWriteDeadline(time.Time{})
+}
+
+func (c *Client) buildRelayBcstAtom(uphostIP uint32, uphostPort uint16) *pcp.Atom {
+	buf := c.ch.Buffer
+	globalIP := c.globalIP.Load()
+	flags := byte(pcp.PCPHostFlags1Relay | pcp.PCPHostFlags1Recv | pcp.PCPHostFlags1CIN)
+	if globalIP != 0 {
+		flags |= pcp.PCPHostFlags1Direct
+	}
+	hostAtom := pcp.NewParentAtom(pcp.PCPHost,
+		pcp.NewIDAtom(pcp.PCPHostID, c.sessionID),
+		pcp.NewIntAtom(pcp.PCPHostIP, globalIP),
+		pcp.NewShortAtom(pcp.PCPHostPort, c.listenPort),
+		pcp.NewIntAtom(pcp.PCPHostNumListeners, uint32(c.ch.NumListeners())),
+		pcp.NewIntAtom(pcp.PCPHostNumRelays, uint32(c.ch.NumRelays())),
+		pcp.NewIntAtom(pcp.PCPHostUptime, c.ch.UptimeSeconds()),
+		pcp.NewIntAtom(pcp.PCPHostOldPos, buf.OldestPos()),
+		pcp.NewIntAtom(pcp.PCPHostNewPos, buf.NewestPos()),
+		pcp.NewIDAtom(pcp.PCPHostChanID, c.channelID),
+		pcp.NewByteAtom(pcp.PCPHostFlags1, flags),
+		pcp.NewIntAtom(pcp.PCPHostVersion, version.PCPVersion),
+		pcp.NewIntAtom(pcp.PCPHostVersionVP, version.PCPVersionVP),
+		pcp.NewBytesAtom(pcp.PCPHostVersionExPrefix, []byte(version.ExPrefix)),
+		pcp.NewShortAtom(pcp.PCPHostVersionExNumber, version.ExNumber()),
+		pcp.NewIntAtom(pcp.PCPHostUphostIP, uphostIP),
+		pcp.NewIntAtom(pcp.PCPHostUphostPort, uint32(uphostPort)),
+		pcp.NewIntAtom(pcp.PCPHostUphostHops, 1),
+	)
+	return pcp.NewParentAtom(pcp.PCPBcst,
+		pcp.NewByteAtom(pcp.PCPBcstTTL, 7),
+		pcp.NewByteAtom(pcp.PCPBcstHops, 0),
+		pcp.NewIDAtom(pcp.PCPBcstFrom, c.sessionID),
+		pcp.NewByteAtom(pcp.PCPBcstGroup, byte(pcp.PCPBcstGroupRoot)),
+		pcp.NewIDAtom(pcp.PCPBcstChanID, c.channelID),
+		pcp.NewIntAtom(pcp.PCPBcstVersion, version.PCPVersion),
+		hostAtom,
+	)
+}
+
+func connRemoteIPPort(conn net.Conn) (uint32, uint16) {
+	tcp, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		return 0, 0
+	}
+	ip4 := tcp.IP.To4()
+	if ip4 == nil {
+		return 0, 0
+	}
+	return binary.BigEndian.Uint32(ip4), uint16(tcp.Port)
 }
 
 // readHTTPStatus reads the HTTP status line and all headers from br,
