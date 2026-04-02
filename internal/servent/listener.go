@@ -134,7 +134,7 @@ func (l *Listener) handle(conn net.Conn) {
 	case startsWith(peek, "pcp\n"):
 		slog.Debug("servent: ping", "remote", conn.RemoteAddr())
 		handlePing(conn, br, l.sessionID)
-	case startsWith(peek, "POST /api"):
+	case startsWith(peek, "POST /api"), startsWith(peek, "OPTIONS /api"):
 		if l.apiHandler != nil {
 			l.handleAPIRequest(conn, br)
 		} else {
@@ -331,6 +331,7 @@ func (l *Listener) handleAPIRequest(conn net.Conn, br *bufio.Reader) {
 		return
 	}
 	defer req.Body.Close()
+	req.RemoteAddr = conn.RemoteAddr().String()
 	rw := newAPIResponseWriter(conn)
 	l.apiHandler.ServeHTTP(rw, req)
 	rw.flush()

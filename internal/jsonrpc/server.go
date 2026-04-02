@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 
@@ -67,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 
+		slog.Debug("jsonrpc: request", "remote", r.RemoteAddr, "method", req.Method)
 		result, rpcErr := s.dispatch(req.Method, req.Params)
 
 		w.Header().Set("Content-Type", "application/json")
