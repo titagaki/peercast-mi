@@ -80,7 +80,7 @@ addr = "pcp://localhost:7144/"
 
 ```sh
 python3 -m http.server 8080 --directory ui/
-# → http://localhost:8080/peercast-mm-api-client.html
+# → http://localhost:8080/peercast-mi-api-client.html
 ```
 
 localhost 以外のマシンからアクセスする場合は `config.toml` で Basic 認証を設定する。
