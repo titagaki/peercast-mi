@@ -125,16 +125,16 @@ func (l *Listener) handle(conn net.Conn) {
 	}
 
 	switch {
-	case startsWith(peek, "GET /channel/"):
+	case bytes.HasPrefix(peek, []byte("GET /channel/")):
 		l.handlePCPRelay(cc, br, peek)
-	case startsWith(peek, "GET /stream/"):
+	case bytes.HasPrefix(peek, []byte("GET /stream/")):
 		l.handleHTTPStream(cc, br, peek)
-	case startsWith(peek, "GET /pls/"):
+	case bytes.HasPrefix(peek, []byte("GET /pls/")):
 		l.handlePLS(cc, br, peek)
-	case startsWith(peek, "pcp\n"):
+	case bytes.HasPrefix(peek, []byte("pcp\n")):
 		slog.Debug("servent: ping", "remote", conn.RemoteAddr())
 		handlePing(conn, br, l.sessionID)
-	case startsWith(peek, "POST /api"), startsWith(peek, "OPTIONS /api"):
+	case bytes.HasPrefix(peek, []byte("POST /api")), bytes.HasPrefix(peek, []byte("OPTIONS /api")):
 		if l.apiHandler != nil {
 			l.handleAPIRequest(conn, br)
 		} else {
@@ -279,24 +279,12 @@ func (l *Listener) isUpstreamFull() bool {
 	return currentKbps >= int64(l.maxUpstreamKbps)
 }
 
-func startsWith(data []byte, prefix string) bool {
-	if len(data) < len(prefix) {
-		return false
-	}
-	for i := 0; i < len(prefix); i++ {
-		if data[i] != prefix[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // parseChannelIDFromPath extracts a 32-hex-char channel ID from the peeked
 // bytes. pathPrefix is the URL path segment before the ID (e.g. "/channel/").
 // The peek slice starts with "GET ".
 func parseChannelIDFromPath(peek []byte, pathPrefix string) (pcp.GnuID, bool) {
 	s := string(peek)
-	idx := indexString(s, pathPrefix)
+	idx := strings.Index(s, pathPrefix)
 	if idx < 0 {
 		return pcp.GnuID{}, false
 	}
@@ -312,15 +300,6 @@ func parseChannelIDFromPath(peek []byte, pathPrefix string) (pcp.GnuID, bool) {
 	var id pcp.GnuID
 	copy(id[:], b)
 	return id, true
-}
-
-func indexString(s, sub string) int {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
 
 // handleAPIRequest handles a JSON-RPC request forwarded from the listener.

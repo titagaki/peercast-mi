@@ -17,6 +17,7 @@ import (
 	"github.com/titagaki/peercast-pcp/pcp"
 
 	"github.com/titagaki/peercast-mi/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/pcputil"
 	"github.com/titagaki/peercast-mi/internal/version"
 )
 
@@ -130,13 +131,30 @@ func (c *Client) Stop() {
 }
 
 func (c *Client) connect() ([]string, error) {
-	chanIDHex := hex.EncodeToString(c.channelID[:])
-
 	conn, err := net.DialTimeout("tcp", c.upstreamAddr, dialTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+
+	br, err := c.handshake(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	// Send periodic BCST HOST atoms upstream so intermediate nodes can
+	// populate their relay tree with peercast-mi's version info.
+	bcstStop := make(chan struct{})
+	go c.bcstHostLoop(conn, bcstStop)
+	defer close(bcstStop)
+
+	return c.receiveLoop(conn, br)
+}
+
+// handshake performs the PCP relay handshake over an established connection:
+// sends the HTTP GET + helo atom, reads the HTTP response + oleh atom.
+func (c *Client) handshake(conn net.Conn) (*bufio.Reader, error) {
+	chanIDHex := hex.EncodeToString(c.channelID[:])
 
 	// 1. Send HTTP GET /channel/<id> with PCP upgrade header.
 	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: 1\r\nx-peercast-pos: 0\r\n\r\n", chanIDHex, c.upstreamAddr)
@@ -159,7 +177,7 @@ func (c *Client) connect() ([]string, error) {
 
 	br := bufio.NewReader(conn)
 
-	// 3. Read HTTP response headers (skip until blank line).
+	// 3. Read HTTP response headers.
 	statusCode, err := readHTTPStatus(br)
 	if err != nil {
 		return nil, fmt.Errorf("read HTTP response: %w", err)
@@ -178,15 +196,7 @@ func (c *Client) connect() ([]string, error) {
 	}
 
 	slog.Info("relay: connected", "addr", c.upstreamAddr, "channel", chanIDHex)
-
-	// 5. Send periodic BCST HOST atoms upstream so intermediate nodes can
-	// populate their relay tree with peercast-mi's version info.
-	bcstStop := make(chan struct{})
-	go c.bcstHostLoop(conn, bcstStop)
-	defer close(bcstStop)
-
-	// 6. Receive loop. Returns any relay host hints from PCPHost atoms.
-	return c.receiveLoop(conn, br)
+	return br, nil
 }
 
 func (c *Client) receiveLoop(conn net.Conn, br *bufio.Reader) ([]string, error) {
@@ -419,31 +429,22 @@ func (c *Client) writeBcstHost(conn net.Conn, uphostIP uint32, uphostPort uint16
 }
 
 func (c *Client) buildRelayBcstAtom(uphostIP uint32, uphostPort uint16) *pcp.Atom {
-	buf := c.ch.Buffer
 	globalIP := c.globalIP.Load()
-	flags := byte(pcp.PCPHostFlags1Relay | pcp.PCPHostFlags1Recv | pcp.PCPHostFlags1CIN)
-	if globalIP != 0 {
-		flags |= pcp.PCPHostFlags1Direct
-	}
-	hostAtom := pcp.NewParentAtom(pcp.PCPHost,
-		pcp.NewIDAtom(pcp.PCPHostID, c.sessionID),
-		pcp.NewIntAtom(pcp.PCPHostIP, globalIP),
-		pcp.NewShortAtom(pcp.PCPHostPort, c.listenPort),
-		pcp.NewIntAtom(pcp.PCPHostNumListeners, uint32(c.ch.NumListeners())),
-		pcp.NewIntAtom(pcp.PCPHostNumRelays, uint32(c.ch.NumRelays())),
-		pcp.NewIntAtom(pcp.PCPHostUptime, c.ch.UptimeSeconds()),
-		pcp.NewIntAtom(pcp.PCPHostOldPos, buf.OldestPos()),
-		pcp.NewIntAtom(pcp.PCPHostNewPos, buf.NewestPos()),
-		pcp.NewIDAtom(pcp.PCPHostChanID, c.channelID),
-		pcp.NewByteAtom(pcp.PCPHostFlags1, flags),
-		pcp.NewIntAtom(pcp.PCPHostVersion, version.PCPVersion),
-		pcp.NewIntAtom(pcp.PCPHostVersionVP, version.PCPVersionVP),
-		pcp.NewBytesAtom(pcp.PCPHostVersionExPrefix, []byte(version.ExPrefix)),
-		pcp.NewShortAtom(pcp.PCPHostVersionExNumber, version.ExNumber()),
-		pcp.NewIntAtom(pcp.PCPHostUphostIP, uphostIP),
-		pcp.NewIntAtom(pcp.PCPHostUphostPort, uint32(uphostPort)),
-		pcp.NewIntAtom(pcp.PCPHostUphostHops, 1),
-	)
+	hostAtom := pcputil.BuildHostAtom(pcputil.HostAtomParams{
+		SessionID:    c.sessionID,
+		GlobalIP:     globalIP,
+		ListenPort:   c.listenPort,
+		ChannelID:    c.channelID,
+		NumListeners: c.ch.NumListeners(),
+		NumRelays:    c.ch.NumRelays(),
+		Uptime:       c.ch.UptimeSeconds(),
+		OldPos:       c.ch.OldestPos(),
+		NewPos:       c.ch.NewestPos(),
+		HasGlobalIP:  globalIP != 0,
+		UphostIP:     uphostIP,
+		UphostPort:   uphostPort,
+		UphostHops:   1,
+	})
 	return pcp.NewParentAtom(pcp.PCPBcst,
 		pcp.NewByteAtom(pcp.PCPBcstTTL, 7),
 		pcp.NewByteAtom(pcp.PCPBcstHops, 0),

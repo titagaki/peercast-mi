@@ -19,16 +19,28 @@ type YPBumper interface {
 	Bump()
 }
 
+// ChannelManager is the subset of channel.Manager that the JSON-RPC server needs.
+type ChannelManager interface {
+	IssueStreamKey(accountName, streamKey string) error
+	RevokeStreamKey(accountName string) bool
+	Broadcast(streamKey string, info channel.ChannelInfo, track channel.TrackInfo) (*channel.Channel, error)
+	Stop(channelID pcp.GnuID) bool
+	GetByID(channelID pcp.GnuID) (*channel.Channel, bool)
+	StreamKeyByID(channelID pcp.GnuID) (string, bool)
+	List() []*channel.Channel
+	AddRelayChannel(ch *channel.Channel, r channel.RelayHandle)
+}
+
 // Server handles JSON-RPC 2.0 requests at POST /api/1.
 type Server struct {
 	sessionID pcp.GnuID
-	mgr       *channel.Manager
+	mgr       ChannelManager
 	cfg       *config.Config
 	ypClient  YPBumper // may be nil
 }
 
 // New creates a new JSON-RPC Server.
-func New(sessionID pcp.GnuID, mgr *channel.Manager, cfg *config.Config, ypClient YPBumper) *Server {
+func New(sessionID pcp.GnuID, mgr ChannelManager, cfg *config.Config, ypClient YPBumper) *Server {
 	return &Server{
 		sessionID: sessionID,
 		mgr:       mgr,

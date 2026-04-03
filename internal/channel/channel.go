@@ -23,12 +23,6 @@ type OutputStream interface {
 	NotifyInfo()
 	// NotifyTrack is called when TrackInfo changes.
 	NotifyTrack()
-	// SendBcst enqueues a bcst atom for forwarding to downstream.
-	// Only meaningful for PCP output streams; HTTP streams ignore this.
-	SendBcst(atom *pcp.Atom)
-	// PeerID returns the session ID of the remote peer.
-	// Used by Broadcast to avoid forwarding back to the same peer on multiple connections.
-	PeerID() pcp.GnuID
 	// Close terminates the output stream.
 	Close()
 	// Type returns whether this is a PCP relay or HTTP direct stream.
@@ -39,6 +33,15 @@ type OutputStream interface {
 	RemoteAddr() string
 	// SendRate returns bytes sent per second (last full second).
 	SendRate() int64
+}
+
+// BcstForwarder is implemented by PCP output streams that participate in
+// bcst atom forwarding. HTTP streams do not implement this interface.
+type BcstForwarder interface {
+	// SendBcst enqueues a bcst atom for forwarding to downstream.
+	SendBcst(atom *pcp.Atom)
+	// PeerID returns the session ID of the remote peer.
+	PeerID() pcp.GnuID
 }
 
 // ConnectionInfo is a snapshot of an active output connection.
@@ -52,7 +55,7 @@ type ConnectionInfo struct {
 // Channel is the central data structure for an active broadcast.
 type Channel struct {
 	ID        pcp.GnuID
-	Buffer    *ContentBuffer
+	buffer    *ContentBuffer
 	StartTime time.Time
 
 	mu             sync.RWMutex
@@ -73,7 +76,7 @@ func New(id, broadcastID pcp.GnuID, bufSize int) *Channel {
 	return &Channel{
 		ID:          id,
 		broadcastID: broadcastID,
-		Buffer:      NewContentBuffer(bufSize),
+		buffer:      NewContentBuffer(bufSize),
 		StartTime:   time.Now(),
 	}
 }
@@ -165,7 +168,7 @@ func (c *Channel) SetTrack(track TrackInfo) {
 
 // SetHeader updates the stream header and notifies outputs.
 func (c *Channel) SetHeader(data []byte) {
-	c.Buffer.SetHeader(data)
+	c.buffer.SetHeader(data)
 	c.mu.RLock()
 	outputs := append([]OutputStream(nil), c.outputs...)
 	c.mu.RUnlock()
@@ -176,7 +179,37 @@ func (c *Channel) SetHeader(data []byte) {
 
 // Write appends a data packet to the buffer.
 func (c *Channel) Write(data []byte, pos uint32, contFlags byte) {
-	c.Buffer.Write(data, pos, contFlags)
+	c.buffer.Write(data, pos, contFlags)
+}
+
+// HasData reports whether the buffer contains at least one packet.
+func (c *Channel) HasData() bool {
+	return c.buffer.HasData()
+}
+
+// Header returns the current stream header and its position.
+func (c *Channel) Header() ([]byte, uint32) {
+	return c.buffer.Header()
+}
+
+// Signal returns a channel that will be closed when new data is written.
+func (c *Channel) Signal() <-chan struct{} {
+	return c.buffer.Signal()
+}
+
+// Since returns all packets at or after the given stream position.
+func (c *Channel) Since(pos uint32) []Content {
+	return c.buffer.Since(pos)
+}
+
+// OldestPos returns the stream position of the oldest buffered packet.
+func (c *Channel) OldestPos() uint32 {
+	return c.buffer.OldestPos()
+}
+
+// NewestPos returns the stream position of the newest buffered packet.
+func (c *Channel) NewestPos() uint32 {
+	return c.buffer.NewestPos()
 }
 
 // AddOutput registers an output stream and updates the appropriate counter.
@@ -289,7 +322,10 @@ func (c *Channel) UptimeSeconds() uint32 {
 // Broadcast forwards a bcst atom to all PCP output streams except the sender
 // and any other connections from the same peer (same session ID).
 func (c *Channel) Broadcast(from OutputStream, atom *pcp.Atom) {
-	fromPeerID := from.PeerID()
+	var fromPeerID pcp.GnuID
+	if bf, ok := from.(BcstForwarder); ok {
+		fromPeerID = bf.PeerID()
+	}
 	c.mu.RLock()
 	outputs := append([]OutputStream(nil), c.outputs...)
 	c.mu.RUnlock()
@@ -297,10 +333,14 @@ func (c *Channel) Broadcast(from OutputStream, atom *pcp.Atom) {
 		if o == from || o.Type() != OutputStreamPCP {
 			continue
 		}
-		if o.PeerID() == fromPeerID {
+		bf, ok := o.(BcstForwarder)
+		if !ok {
+			continue
+		}
+		if bf.PeerID() == fromPeerID {
 			continue // 同一ピアの別接続には転送しない（ループ防止）
 		}
-		o.SendBcst(atom)
+		bf.SendBcst(atom)
 	}
 }
 

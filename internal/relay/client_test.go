@@ -197,7 +197,7 @@ func TestHandlePkt_Head(t *testing.T) {
 	)
 	c.handlePkt(pkt)
 
-	got, _ := ch.Buffer.Header()
+	got, _ := ch.Header()
 	if !bytes.Equal(got, headerData) {
 		t.Errorf("Header = %v, want %v", got, headerData)
 	}
@@ -215,7 +215,7 @@ func TestHandlePkt_Data(t *testing.T) {
 	)
 	c.handlePkt(pkt)
 
-	packets := ch.Buffer.Since(0)
+	packets := ch.Since(0)
 	if len(packets) != 1 {
 		t.Fatalf("got %d packets, want 1", len(packets))
 	}
@@ -238,7 +238,7 @@ func TestHandlePkt_MissingType(t *testing.T) {
 	)
 	c.handlePkt(pkt)
 
-	packets := ch.Buffer.Since(0)
+	packets := ch.Since(0)
 	if len(packets) != 0 {
 		t.Fatalf("expected no packets, got %d", len(packets))
 	}

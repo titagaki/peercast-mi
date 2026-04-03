@@ -11,6 +11,7 @@ import (
 	"github.com/titagaki/peercast-pcp/pcp"
 
 	"github.com/titagaki/peercast-mi/internal/channel"
+	"github.com/titagaki/peercast-mi/internal/pcputil"
 	"github.com/titagaki/peercast-mi/internal/version"
 )
 
@@ -251,7 +252,6 @@ func (c *Client) buildHelo() *pcp.Atom {
 func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
 	info := ch.Info()
 	track := ch.Track()
-	buf := ch.Buffer
 
 	chanInfo := pcp.NewParentAtom(pcp.PCPChanInfo,
 		pcp.NewStringAtom(pcp.PCPChanInfoName, info.Name),
@@ -277,33 +277,27 @@ func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
 		chanTrack,
 	)
 
-	flags := byte(pcp.PCPHostFlags1Tracker | pcp.PCPHostFlags1Relay | pcp.PCPHostFlags1Direct | pcp.PCPHostFlags1Recv | pcp.PCPHostFlags1CIN)
-	hostChildren := []*pcp.Atom{
-		pcp.NewIDAtom(pcp.PCPHostID, c.sessionID),
-		pcp.NewIntAtom(pcp.PCPHostIP, c.globalIP),
-		pcp.NewShortAtom(pcp.PCPHostPort, c.listenPort),
-		pcp.NewIntAtom(pcp.PCPHostNumListeners, uint32(ch.NumListeners())),
-		pcp.NewIntAtom(pcp.PCPHostNumRelays, uint32(ch.NumRelays())),
-		pcp.NewIntAtom(pcp.PCPHostUptime, ch.UptimeSeconds()),
-		pcp.NewIntAtom(pcp.PCPHostOldPos, buf.OldestPos()),
-		pcp.NewIntAtom(pcp.PCPHostNewPos, buf.NewestPos()),
-		pcp.NewIDAtom(pcp.PCPHostChanID, ch.ID),
-		pcp.NewByteAtom(pcp.PCPHostFlags1, flags),
-		pcp.NewIntAtom(pcp.PCPHostTracker, 1),
-		pcp.NewIntAtom(pcp.PCPHostVersion, version.PCPVersion),
-		pcp.NewIntAtom(pcp.PCPHostVersionVP, version.PCPVersionVP),
-		pcp.NewBytesAtom(pcp.PCPHostVersionExPrefix, []byte(version.ExPrefix)),
-		pcp.NewShortAtom(pcp.PCPHostVersionExNumber, version.ExNumber()),
+	hp := pcputil.HostAtomParams{
+		SessionID:    c.sessionID,
+		GlobalIP:     c.globalIP,
+		ListenPort:   c.listenPort,
+		ChannelID:    ch.ID,
+		NumListeners: ch.NumListeners(),
+		NumRelays:    ch.NumRelays(),
+		Uptime:       ch.UptimeSeconds(),
+		OldPos:       ch.OldestPos(),
+		NewPos:       ch.NewestPos(),
+		IsTracker:    true,
+		HasGlobalIP:  true,
+		TrackerAtom:  true,
 	}
 	if upAddr := ch.UpstreamAddr(); upAddr != "" {
 		if upIP, upPort, err := parseHostPort(upAddr); err == nil {
-			hostChildren = append(hostChildren,
-				pcp.NewIntAtom(pcp.PCPHostUphostIP, upIP),
-				pcp.NewIntAtom(pcp.PCPHostUphostPort, uint32(upPort)),
-			)
+			hp.UphostIP = upIP
+			hp.UphostPort = upPort
 		}
 	}
-	hostAtom := pcp.NewParentAtom(pcp.PCPHost, hostChildren...)
+	hostAtom := pcputil.BuildHostAtom(hp)
 
 	return pcp.NewParentAtom(pcp.PCPBcst,
 		pcp.NewByteAtom(pcp.PCPBcstTTL, bcstTTL),

@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/titagaki/peercast-pcp/pcp"
-
 	"github.com/titagaki/peercast-mi/internal/channel"
 )
 
@@ -38,12 +36,6 @@ func newHTTPOutputStream(conn *countingConn, br *bufio.Reader, ch *channel.Chann
 // Type implements channel.OutputStream.
 func (o *HTTPOutputStream) Type() channel.OutputStreamType { return channel.OutputStreamHTTP }
 
-// SendBcst is a no-op for HTTP streams; bcst forwarding is PCP-only.
-func (o *HTTPOutputStream) SendBcst(_ *pcp.Atom) {}
-
-// PeerID returns a zero ID; HTTP streams are never involved in bcst forwarding.
-func (o *HTTPOutputStream) PeerID() pcp.GnuID { return pcp.GnuID{} }
-
 func (o *HTTPOutputStream) run() {
 	defer slog.Info("http: viewer disconnected", "remote", o.remoteAddr, "id", o.id)
 	defer o.conn.Close()
@@ -65,20 +57,20 @@ func (o *HTTPOutputStream) run() {
 	}
 	var sb strings.Builder
 	sb.WriteString("HTTP/1.0 200 OK\r\n")
-	sb.WriteString(fmt.Sprintf("Content-Type: %s\r\n", mimeType))
-	sb.WriteString(fmt.Sprintf("icy-name: %s\r\n", info.Name))
-	sb.WriteString(fmt.Sprintf("icy-genre: %s\r\n", info.Genre))
-	sb.WriteString(fmt.Sprintf("icy-url: %s\r\n", info.URL))
+	sb.WriteString(fmt.Sprintf("Content-Type: %s\r\n", sanitizeHeaderValue(mimeType)))
+	sb.WriteString(fmt.Sprintf("icy-name: %s\r\n", sanitizeHeaderValue(info.Name)))
+	sb.WriteString(fmt.Sprintf("icy-genre: %s\r\n", sanitizeHeaderValue(info.Genre)))
+	sb.WriteString(fmt.Sprintf("icy-url: %s\r\n", sanitizeHeaderValue(info.URL)))
 	sb.WriteString(fmt.Sprintf("icy-bitrate: %d\r\n", info.Bitrate))
 	sb.WriteString("\r\n")
 	if _, err := io.WriteString(o.conn, sb.String()); err != nil {
 		return
 	}
 
-	if !o.ch.Buffer.HasData() {
+	if !o.ch.HasData() {
 		// Wait for the first data packet (e.g. while relay is being established).
 		select {
-		case <-o.ch.Buffer.Signal():
+		case <-o.ch.Signal():
 			// data arrived
 		case <-o.closeCh:
 			return
@@ -88,7 +80,7 @@ func (o *HTTPOutputStream) run() {
 	}
 
 	// Send stream header (FLV header / codec config).
-	header, _ := o.ch.Buffer.Header()
+	header, _ := o.ch.Header()
 	if len(header) > 0 {
 		o.conn.SetWriteDeadline(time.Now().Add(directWriteTimeout))
 		if _, err := o.conn.Write(header); err != nil {
@@ -101,8 +93,8 @@ func (o *HTTPOutputStream) run() {
 	waitingForKeyframe := true
 
 	for {
-		sigCh := o.ch.Buffer.Signal()
-		packets := o.ch.Buffer.Since(pos)
+		sigCh := o.ch.Signal()
+		packets := o.ch.Since(pos)
 
 		if len(packets) == 0 {
 			select {
@@ -127,4 +119,10 @@ func (o *HTTPOutputStream) run() {
 			pos = pkt.Pos + uint32(len(pkt.Data))
 		}
 	}
+}
+
+// sanitizeHeaderValue removes CR and LF characters from s to prevent
+// HTTP header injection.
+func sanitizeHeaderValue(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }

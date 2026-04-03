@@ -109,7 +109,7 @@ func (s *Server) buildStatus(ch *channel.Channel) chanStatusResult {
 			source = fmt.Sprintf("rtmp://127.0.0.1:%d/live/%s", s.cfg.RTMPPort, key)
 		}
 	}
-	receiving := ch.Buffer.HasData()
+	receiving := ch.HasData()
 	status := "Idle"
 	if receiving {
 		status = "Receiving"

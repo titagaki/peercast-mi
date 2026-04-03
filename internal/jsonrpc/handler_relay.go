@@ -98,7 +98,7 @@ func (s *Server) getChannelRelayTree(ch *channel.Channel) (interface{}, *rpcErro
 		IsTracker:     ch.IsBroadcasting(),
 		IsRelayFull:   ch.IsRelayFull(s.cfg.MaxRelays),
 		IsDirectFull:  ch.IsDirectFull(s.cfg.MaxListeners),
-		IsReceiving:   ch.Buffer.HasData(),
+		IsReceiving:   ch.HasData(),
 		IsControlFull: false,
 		Version:       version.PCPVersion,
 		VersionString: version.AgentName,

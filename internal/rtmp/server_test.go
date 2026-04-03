@@ -151,7 +151,7 @@ func TestOnVideo_AVCSequenceHeader(t *testing.T) {
 		t.Error("avcTag timestamp should be 0")
 	}
 	// Buffer should have the header set
-	header, _ := ch.Buffer.Header()
+	header, _ := ch.Header()
 	if len(header) == 0 {
 		t.Fatal("header should be set after AVC sequence header")
 	}
@@ -160,7 +160,7 @@ func TestOnVideo_AVCSequenceHeader(t *testing.T) {
 		t.Error("header should start with FLV file header")
 	}
 	// No data packets should be written
-	if ch.Buffer.HasData() {
+	if ch.HasData() {
 		t.Error("data should not be written for sequence header")
 	}
 }
@@ -175,10 +175,10 @@ func TestOnVideo_Keyframe(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !ch.Buffer.HasData() {
+	if !ch.HasData() {
 		t.Fatal("keyframe should be written to buffer")
 	}
-	packets := ch.Buffer.Since(0)
+	packets := ch.Since(0)
 	if len(packets) != 1 {
 		t.Fatalf("expected 1 packet, got %d", len(packets))
 	}
@@ -197,7 +197,7 @@ func TestOnVideo_InterFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	packets := ch.Buffer.Since(0)
+	packets := ch.Since(0)
 	if len(packets) != 1 {
 		t.Fatalf("expected 1 packet, got %d", len(packets))
 	}
@@ -214,7 +214,7 @@ func TestOnVideo_ShortBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ch.Buffer.HasData() {
+	if ch.HasData() {
 		t.Error("short body should be ignored")
 	}
 }
@@ -236,11 +236,11 @@ func TestOnAudio_AACSequenceHeader(t *testing.T) {
 	if h.aacTag == nil {
 		t.Fatal("aacTag should be set")
 	}
-	header, _ := ch.Buffer.Header()
+	header, _ := ch.Header()
 	if len(header) == 0 {
 		t.Fatal("header should be set after AAC sequence header")
 	}
-	if ch.Buffer.HasData() {
+	if ch.HasData() {
 		t.Error("no data packets should be written for sequence header")
 	}
 }
@@ -255,7 +255,7 @@ func TestOnAudio_DataFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	packets := ch.Buffer.Since(0)
+	packets := ch.Since(0)
 	if len(packets) != 1 {
 		t.Fatalf("expected 1 packet, got %d", len(packets))
 	}
@@ -277,7 +277,7 @@ func TestRebuildHeader_FullHeader(t *testing.T) {
 	h.aacTag = makeFLVTag(8, 0, []byte{0xAF, 0x00})
 	h.rebuildHeader()
 
-	header, _ := ch.Buffer.Header()
+	header, _ := ch.Header()
 	if len(header) == 0 {
 		t.Fatal("header should be set")
 	}
@@ -294,7 +294,7 @@ func TestRebuildHeader_NoSequenceHeaders(t *testing.T) {
 
 	// Neither avcTag nor aacTag set — rebuildHeader should be a no-op
 	h.rebuildHeader()
-	header, _ := ch.Buffer.Header()
+	header, _ := ch.Header()
 	if len(header) != 0 {
 		t.Error("header should not be set without any sequence headers")
 	}
@@ -328,7 +328,7 @@ func TestWriteData_StreamPosAdvances(t *testing.T) {
 	tag2 := makeFLVTag(9, 200, body2)
 	h.writeData(tag2, 0x02)
 
-	packets := ch.Buffer.Since(0)
+	packets := ch.Since(0)
 	if len(packets) != 2 {
 		t.Fatalf("expected 2 packets, got %d", len(packets))
 	}
