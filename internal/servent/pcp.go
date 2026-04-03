@@ -253,6 +253,9 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 		packets := o.ch.Buffer.Since(pos)
 
 		if len(packets) > 0 {
+			if len(packets) > 10 {
+				slog.Debug("pcp: sending burst", "remote", o.remoteAddr, "id", o.id, "packets", len(packets), "pos", pos)
+			}
 			for _, pkt := range packets {
 				if waitingForKeyframe && pkt.ContFlags != 0 {
 					pos = pkt.Pos + uint32(len(pkt.Data))
@@ -272,6 +275,7 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 				)
 				o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 				if err := atom.Write(o.conn); err != nil {
+					slog.Debug("pcp: write error, closing", "remote", o.remoteAddr, "id", o.id, "pos", pkt.Pos, "err", err)
 					return
 				}
 				o.conn.SetWriteDeadline(time.Time{})
@@ -285,6 +289,7 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 		stallTimer.Reset(outputQueueTimeout)
 		select {
 		case <-o.closeCh:
+			slog.Debug("pcp: closed by readLoop", "remote", o.remoteAddr, "id", o.id)
 			o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorShutdown)
 			return
 		case <-sigCh:

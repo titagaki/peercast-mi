@@ -226,6 +226,18 @@ func (h *handler) rebuildHeader() {
 		head = appendFLVTagWithBackPointer(head, h.aacTag)
 	}
 
+	slog.Debug("rtmp: rebuildHeader",
+		"remote", h.remoteAddr,
+		"key", h.streamKey,
+		"headerSize", len(head),
+		"hasMeta", h.metaTag != nil,
+		"metaSize", len(h.metaTag),
+		"hasAVC", h.avcTag != nil,
+		"avcSize", len(h.avcTag),
+		"hasAAC", h.aacTag != nil,
+		"aacSize", len(h.aacTag),
+	)
+
 	ch.SetHeader(head)
 	if !h.headerSent {
 		h.headerSent = true
@@ -238,9 +250,12 @@ func (h *handler) writeData(tag []byte, contFlags byte) {
 	if ch == nil {
 		return
 	}
+	// Append PreviousTagSize (4 bytes big-endian) so that concatenated data
+	// packets form a valid FLV byte stream.
+	data := appendFLVTagWithBackPointer(nil, tag)
 	pos := h.streamPos
-	h.streamPos += uint32(len(tag))
-	ch.Write(tag, pos, contFlags)
+	h.streamPos += uint32(len(data))
+	ch.Write(data, pos, contFlags)
 }
 
 // ---------------------------------------------------------------------------
