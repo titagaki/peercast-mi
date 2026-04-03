@@ -76,8 +76,11 @@ func (o *PCPOutputStream) run() {
 	o.streamLoop(startPos)
 }
 
-// handshake processes the HTTP GET, "pcp\n", and helo/oleh exchange.
+// handshake processes the HTTP GET and helo/oleh exchange.
 // It returns the requested start position from the x-peercast-pos header (0 if absent).
+//
+// PCP over HTTP の場合、クライアントは HTTP 200 受信後に pcp\n マジックを送らず
+// 直接 helo アトムを送る（peercast-yt channel.cpp "don't need PCP_CONNECT here"）。
 func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 	// Read HTTP request.
 	req, err := http.ReadRequest(o.br)
@@ -97,20 +100,6 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 	resp := "HTTP/1.0 200 OK\r\nContent-Type: application/x-peercast-pcp\r\n\r\n"
 	if _, err := io.WriteString(o.conn, resp); err != nil {
 		return 0, fmt.Errorf("write HTTP response: %w", err)
-	}
-
-	// Read "pcp\n" magic atom: 4-byte tag + 4-byte length field + 4-byte version payload.
-	// Expected: tag="pcp\n", size=4, version=1 (IPv4) or 100 (IPv6-mapped).
-	pcpMagic := make([]byte, 12)
-	if _, err := io.ReadFull(o.br, pcpMagic); err != nil {
-		return 0, fmt.Errorf("read pcp magic: %w", err)
-	}
-	if string(pcpMagic[0:4]) != "pcp\n" {
-		return 0, fmt.Errorf("pcp magic: unexpected tag %q", pcpMagic[0:4])
-	}
-	pcpVer := uint32(pcpMagic[8]) | uint32(pcpMagic[9])<<8 | uint32(pcpMagic[10])<<16 | uint32(pcpMagic[11])<<24
-	if pcpVer != 1 && pcpVer != 100 {
-		return 0, fmt.Errorf("pcp magic: unexpected version %d", pcpVer)
 	}
 
 	// Read helo.
