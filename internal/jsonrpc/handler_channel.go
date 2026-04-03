@@ -3,7 +3,6 @@ package jsonrpc
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/titagaki/peercast-mi/internal/channel"
 )
@@ -13,7 +12,7 @@ import (
 // ---------------------------------------------------------------------------
 
 type broadcastChannelParam struct {
-	SourceURI string       `json:"sourceUri"`
+	StreamKey string       `json:"streamKey"`
 	Info      chanInfoArg  `json:"info"`
 	Track     trackInfoArg `json:"track"`
 }
@@ -161,7 +160,7 @@ func (s *Server) revokeStreamKey(params json.RawMessage) (interface{}, *rpcError
 func (s *Server) broadcastChannel(params json.RawMessage) (interface{}, *rpcError) {
 	var args []broadcastChannelParam
 	if err := json.Unmarshal(params, &args); err != nil || len(args) == 0 {
-		return nil, &rpcError{Code: errCodeInvalidParams, Message: "expected [{sourceUri, info, track}]"}
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "expected [{streamKey, info, track}]"}
 	}
 	p := args[0]
 
@@ -169,10 +168,10 @@ func (s *Server) broadcastChannel(params json.RawMessage) (interface{}, *rpcErro
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: "channel name must not be empty"}
 	}
 
-	streamKey, err := extractStreamKey(p.SourceURI)
-	if err != nil {
-		return nil, &rpcError{Code: errCodeInvalidParams, Message: err.Error()}
+	if p.StreamKey == "" {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "streamKey must not be empty"}
 	}
+	streamKey := p.StreamKey
 
 	info := channel.ChannelInfo{
 		Name:     p.Info.Name,
@@ -204,20 +203,6 @@ func (s *Server) broadcastChannel(params json.RawMessage) (interface{}, *rpcErro
 	return map[string]string{"channelId": gnuIDString(ch.ID)}, nil
 }
 
-// extractStreamKey parses the stream key from an RTMP source URI of the form
-// rtmp://host:port/live/<streamKey>.
-func extractStreamKey(sourceURI string) (string, error) {
-	const prefix = "/live/"
-	idx := strings.LastIndex(sourceURI, prefix)
-	if idx < 0 {
-		return "", fmt.Errorf("sourceUri must contain /live/<streamKey>")
-	}
-	key := sourceURI[idx+len(prefix):]
-	if key == "" {
-		return "", fmt.Errorf("stream key is empty in sourceUri")
-	}
-	return key, nil
-}
 
 func (s *Server) getChannels() (interface{}, *rpcError) {
 	type chanEntry struct {

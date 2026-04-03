@@ -124,7 +124,7 @@ curl -s -X POST http://localhost:7144/api/1 \
   -H 'Content-Type: application/json' \
   -d '{
     "jsonrpc":"2.0","method":"broadcastChannel","params":[{
-      "sourceUri": "rtmp://127.0.0.1:1935/live/sk_a1b2c3d4e5f6...",
+      "streamKey": "sk_a1b2c3d4e5f6...",
       "info": {
         "name":    "テスト配信",
         "genre":   "ゲーム",

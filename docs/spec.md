@@ -145,7 +145,7 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 2. エンコーダーが rtmp://host:1935/live/<streamKey> に RTMP push
    ↳ RTMPServer.OnPublish でストリームキーを検証（未発行なら拒否）
 3. クライアントが broadcastChannel を呼ぶ
-   ↳ sourceUri からストリームキーを抽出
+   ↳ streamKey パラメータからストリームキーを取得
    ↳ Channel (IsBroadcasting=true) を生成、Manager に登録、channelId を返す
 4. RTMP データが Channel.ContentBuffer に流れ始める
 5. YPClient が次の bcst サイクルで新チャンネルを YP に通知

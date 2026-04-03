@@ -155,7 +155,7 @@ func (e *testEnv) broadcastChannel(streamKey, name, genre string) string {
 	e.t.Helper()
 	params := []map[string]interface{}{
 		{
-			"sourceUri": fmt.Sprintf("rtmp://127.0.0.1:%d/live/%s", e.rtmpPort, streamKey),
+			"streamKey": streamKey,
 			"info": map[string]interface{}{
 				"name":  name,
 				"genre": genre,

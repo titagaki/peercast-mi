@@ -615,9 +615,9 @@ const FORM_HTML = {
   broadcastChannel: `
     <div class="section-title">Source</div>
     <div class="field-group">
-      <label class="field-label">sourceUri <span class="field-required">*</span></label>
-      <input id="f_sourceUri" class="field-input" type="text" value="rtmp://127.0.0.1:1935/live/" placeholder="rtmp://127.0.0.1:1935/live/sk_..." />
-      <div class="field-hint">/live/&lt;streamKey&gt; 形式。issueStreamKey で登録済みキーを使用</div>
+      <label class="field-label">streamKey <span class="field-required">*</span></label>
+      <input id="f_sourceStreamKey" class="field-input" type="text" placeholder="sk_..." />
+      <div class="field-hint">issueStreamKey で登録済みのストリームキー</div>
     </div>
     ` + infoTrackHtml(3000),
 
@@ -665,7 +665,7 @@ function buildParams(method) {
   switch (method) {
     case 'issueStreamKey':      return [g('f_accountName'), g('f_streamKey')];
     case 'revokeStreamKey':     return [g('f_accountName')];
-    case 'broadcastChannel':    return [{ sourceUri: g('f_sourceUri'), info: infoObj(), track: trackObj() }];
+    case 'broadcastChannel':    return [{ streamKey: g('f_sourceStreamKey'), info: infoObj(), track: trackObj() }];
     case 'relayChannel':        return [{ upstreamAddr: g('f_upstreamAddr'), channelId: g('f_channelId') }];
     case 'setChannelInfo':      return [g('f_channelId'), infoObj(), trackObj()];
     case 'stopChannelConnection': return [g('f_channelId'), gi('f_connectionId')];

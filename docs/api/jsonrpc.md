@@ -56,7 +56,7 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (
 |---|---|---|
 | `issueStreamKey` | `[accountName, streamKey]` | `null` |
 | `revokeStreamKey` | `[accountName]` | `null` |
-| `broadcastChannel` | `[{ sourceUri, info, track }]` | `{ channelId }` |
+| `broadcastChannel` | `[{ streamKey, info, track }]` | `{ channelId }` |
 | `relayChannel` | `[{ upstreamAddr, channelId }]` | `{ channelId }` |
 | `getVersionInfo` | なし | `{ agentName }` |
 | `getSettings` | なし | `{ serverPort, rtmpPort }` |
@@ -108,13 +108,13 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (
 
 ### `broadcastChannel`
 
-**パラメータ:** `[{ sourceUri, info, track }]`
+**パラメータ:** `[{ streamKey, info, track }]`
 
 指定したストリームキーでチャンネルを開始する。
 
 ```json
 [{
-  "sourceUri": "rtmp://127.0.0.1:1935/live/sk_a1b2c3d4e5f6...",
+  "streamKey": "sk_a1b2c3d4e5f6...",
   "info": {
     "name":    "チャンネル名",
     "genre":   "ジャンル",
@@ -134,7 +134,7 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (
 
 | フィールド | 説明 |
 |---|---|
-| `sourceUri` | RTMP ソース URI。`/live/<streamKey>` の形式でストリームキーを含める |
+| `streamKey` | `issueStreamKey` で登録済みのストリームキー (**必須**、空文字列不可) |
 | `info.name` | チャンネル名 (**必須**、空文字列不可) |
 | `info.bitrate` | ビットレート (kbps)。`0` でもよい (RTMP の onMetaData で上書きされる) |
 
@@ -143,11 +143,11 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (
 { "channelId": "0123456789abcdef0123456789abcdef" }
 ```
 
-ChannelID は入力パラメータから決定論的に生成される。同じ `sourceUri` と `info` で再呼び出しすると同じ `channelId` が返る。
+ChannelID は入力パラメータから決定論的に生成される。同じ `streamKey` と `info` で再呼び出しすると同じ `channelId` が返る。
 
 **エラー条件:**
 - `info.name` が空 → `-32602`
-- `sourceUri` に `/live/<streamKey>` 形式がない → `-32602`
+- `streamKey` が空 → `-32602`
 - ストリームキーが未登録 (`issueStreamKey` で登録していない) → `-32602`
 - そのストリームキーで既に放送中 (`stopChannel` してから再呼び出しする) → `-32602`
 
