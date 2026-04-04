@@ -171,9 +171,9 @@ func (c *Client) connectTo(addr string) (stopReason, error) {
 	}
 	defer conn.Close()
 
-	statusCode, br, err := c.handshake(conn, addr)
+	statusCode, br, reason, err := c.handshake(conn, addr)
 	if err != nil {
-		return stopReasonError, err
+		return reason, err
 	}
 
 	if statusCode == 503 {
@@ -187,7 +187,7 @@ func (c *Client) connectTo(addr string) (stopReason, error) {
 	go c.bcstHostLoop(conn, localIP, bcstStop)
 	defer close(bcstStop)
 
-	reason, err := c.processBody(conn, br)
+	reason, err = c.processBody(conn, br)
 
 	// Send PCP_QUIT on disconnect (best-effort, 3-second timeout).
 	quitAtom := pcp.NewIntAtom(pcp.PCPQuit, pcp.PCPErrorQuit+pcp.PCPErrorShutdown)
@@ -200,13 +200,13 @@ func (c *Client) connectTo(addr string) (stopReason, error) {
 
 // handshake performs the PCP relay handshake over an established connection:
 // sends the HTTP GET + helo atom, reads the HTTP response + oleh atom.
-func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, error) {
+func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, stopReason, error) {
 	chanIDHex := hex.EncodeToString(c.channelID[:])
 
 	// 1. Send HTTP GET /channel/<id> with PCP upgrade header.
 	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: 1\r\nx-peercast-pos: 0\r\n\r\n", chanIDHex, addr)
 	if _, err := io.WriteString(conn, req); err != nil {
-		return 0, nil, fmt.Errorf("write GET: %w", err)
+		return 0, nil, stopReasonError, fmt.Errorf("write GET: %w", err)
 	}
 
 	// 2. Send helo atom.
@@ -219,7 +219,7 @@ func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, erro
 		Port:      c.listenPort,
 	}).BuildHeloAtom()
 	if err := helo.Write(conn); err != nil {
-		return 0, nil, fmt.Errorf("write helo: %w", err)
+		return 0, nil, stopReasonError, fmt.Errorf("write helo: %w", err)
 	}
 
 	br := bufio.NewReader(conn)
@@ -227,23 +227,31 @@ func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, erro
 	// 3. Read HTTP response headers.
 	statusCode, err := readHTTPStatus(br)
 	if err != nil {
-		return 0, nil, fmt.Errorf("read HTTP response: %w", err)
+		return 0, nil, stopReasonError, fmt.Errorf("read HTTP response: %w", err)
 	}
 	if statusCode != 200 && statusCode != 503 {
-		return statusCode, nil, fmt.Errorf("upstream returned HTTP %d", statusCode)
+		return statusCode, nil, stopReasonError, fmt.Errorf("upstream returned HTTP %d", statusCode)
 	}
 
 	// 4. Read oleh atom.
 	oleh, err := pcp.ReadAtom(br)
 	if err != nil {
-		return 0, nil, fmt.Errorf("read oleh: %w", err)
+		return 0, nil, stopReasonError, fmt.Errorf("read oleh: %w", err)
 	}
 	if oleh.Tag != pcp.PCPOleh {
-		return 0, nil, fmt.Errorf("expected oleh, got %s", oleh.Tag)
+		if oleh.Tag == pcp.PCPQuit {
+			code, _ := oleh.GetInt()
+			reason := stopReasonOffAir
+			if code == pcp.PCPErrorQuit+pcp.PCPErrorUnavailable {
+				reason = stopReasonUnavailable
+			}
+			return 0, nil, reason, fmt.Errorf("quit from upstream (code %d)", code)
+		}
+		return 0, nil, stopReasonError, fmt.Errorf("expected oleh, got %s", oleh.Tag)
 	}
 
 	slog.Info("relay: connected", "addr", addr, "channel", chanIDHex)
-	return statusCode, br, nil
+	return statusCode, br, stopReasonError, nil
 }
 
 // processBody handles the main receive loop for a 200 (connected) relay.
