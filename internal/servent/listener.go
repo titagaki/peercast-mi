@@ -362,11 +362,11 @@ func handlePing(conn net.Conn, br *bufio.Reader, sessionID pcp.GnuID) {
 		return
 	}
 
-	oleh := pcp.NewParentAtom(pcp.PCPOleh,
-		pcp.NewStringAtom(pcp.PCPHeloAgent, version.AgentName),
-		pcp.NewIDAtom(pcp.PCPHeloSessionID, sessionID),
-		pcp.NewIntAtom(pcp.PCPHeloVersion, version.PCPVersion),
-	)
+	oleh := (&pcp.HeloPacket{
+		Agent:     version.AgentName,
+		SessionID: sessionID,
+		Version:   version.PCPVersion,
+	}).BuildOlehAtom()
 	if err := oleh.Write(conn); err != nil {
 		return
 	}

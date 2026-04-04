@@ -65,7 +65,7 @@ func TestReadHTTPStatus_Empty(t *testing.T) {
 	}
 }
 
-// --- parseChanInfo ---
+// --- ParseChanInfo ---
 
 func TestParseChanInfo(t *testing.T) {
 	atom := pcp.NewParentAtom(pcp.PCPChanInfo,
@@ -77,7 +77,11 @@ func TestParseChanInfo(t *testing.T) {
 		pcp.NewStringAtom(pcp.PCPChanInfoType, "FLV"),
 		pcp.NewIntAtom(pcp.PCPChanInfoBitrate, 500),
 	)
-	info := parseChanInfo(atom)
+	ci, err := pcp.ParseChanInfo(atom)
+	if err != nil {
+		t.Fatalf("ParseChanInfo: %v", err)
+	}
+	info := channel.ChannelInfoFromPCP(ci)
 
 	if info.Name != "Test Channel" {
 		t.Errorf("Name = %q, want %q", info.Name, "Test Channel")
@@ -112,13 +116,17 @@ func TestParseChanInfo_UnknownType(t *testing.T) {
 	atom := pcp.NewParentAtom(pcp.PCPChanInfo,
 		pcp.NewStringAtom(pcp.PCPChanInfoType, "OGG"),
 	)
-	info := parseChanInfo(atom)
+	ci, err := pcp.ParseChanInfo(atom)
+	if err != nil {
+		t.Fatalf("ParseChanInfo: %v", err)
+	}
+	info := channel.ChannelInfoFromPCP(ci)
 	if info.MIMEType != "" {
 		t.Errorf("MIMEType = %q, want empty for unknown type", info.MIMEType)
 	}
 }
 
-// --- parseChanTrack ---
+// --- ParseChanTrack ---
 
 func TestParseChanTrack(t *testing.T) {
 	atom := pcp.NewParentAtom(pcp.PCPChanTrack,
@@ -127,7 +135,11 @@ func TestParseChanTrack(t *testing.T) {
 		pcp.NewStringAtom(pcp.PCPChanTrackURL, "http://music.example.com"),
 		pcp.NewStringAtom(pcp.PCPChanTrackAlbum, "Album Name"),
 	)
-	track := parseChanTrack(atom)
+	ct, err := pcp.ParseChanTrack(atom)
+	if err != nil {
+		t.Fatalf("ParseChanTrack: %v", err)
+	}
+	track := channel.TrackInfoFromPCP(ct)
 
 	if track.Title != "Song Title" {
 		t.Errorf("Title = %q, want %q", track.Title, "Song Title")
@@ -190,12 +202,11 @@ func TestHandlePkt_Head(t *testing.T) {
 	c := New("127.0.0.1:7144", pcp.GnuID{}, pcp.GnuID{}, 0, ch)
 
 	headerData := []byte("FLV\x01\x05")
-	pkt := pcp.NewParentAtom(pcp.PCPChanPkt,
-		pcp.NewID4Atom(pcp.PCPChanPktType, pktTypeHead),
-		pcp.NewIntAtom(pcp.PCPChanPktPos, 0),
-		pcp.NewBytesAtom(pcp.PCPChanPktData, headerData),
-	)
-	c.handlePkt(pkt)
+	c.handlePkt(&pcp.ChanPktData{
+		Type: pktTypeHead,
+		Pos:  0,
+		Data: headerData,
+	})
 
 	got, _ := ch.Header()
 	if !bytes.Equal(got, headerData) {
@@ -208,12 +219,11 @@ func TestHandlePkt_Data(t *testing.T) {
 	c := New("127.0.0.1:7144", pcp.GnuID{}, pcp.GnuID{}, 0, ch)
 
 	payload := []byte{0xDE, 0xAD, 0xBE, 0xEF}
-	pkt := pcp.NewParentAtom(pcp.PCPChanPkt,
-		pcp.NewID4Atom(pcp.PCPChanPktType, pktTypeData),
-		pcp.NewIntAtom(pcp.PCPChanPktPos, 100),
-		pcp.NewBytesAtom(pcp.PCPChanPktData, payload),
-	)
-	c.handlePkt(pkt)
+	c.handlePkt(&pcp.ChanPktData{
+		Type: pktTypeData,
+		Pos:  100,
+		Data: payload,
+	})
 
 	packets := ch.Since(0)
 	if len(packets) != 1 {
@@ -232,11 +242,10 @@ func TestHandlePkt_MissingType(t *testing.T) {
 	c := New("127.0.0.1:7144", pcp.GnuID{}, pcp.GnuID{}, 0, ch)
 
 	// pkt without type → should be silently ignored
-	pkt := pcp.NewParentAtom(pcp.PCPChanPkt,
-		pcp.NewIntAtom(pcp.PCPChanPktPos, 0),
-		pcp.NewBytesAtom(pcp.PCPChanPktData, []byte{1, 2, 3}),
-	)
-	c.handlePkt(pkt)
+	c.handlePkt(&pcp.ChanPktData{
+		Pos:  0,
+		Data: []byte{1, 2, 3},
+	})
 
 	packets := ch.Since(0)
 	if len(packets) != 0 {

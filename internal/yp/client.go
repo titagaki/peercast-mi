@@ -225,27 +225,29 @@ func (c *Client) sendAllBcst(conn *pcp.Conn) error {
 }
 
 func (c *Client) handleOleh(a *pcp.Atom) {
-	rip := a.FindChild(pcp.PCPHeloRemoteIP)
-	if rip != nil {
-		if v, err := rip.GetInt(); err == nil {
-			c.globalIP = v
-			slog.Debug("yp: oleh received", "addr", c.addr, "global_ip", ipToString(v))
-			if c.OnGlobalIP != nil {
-				c.OnGlobalIP(v)
-			}
+	oleh, err := pcp.ParseHeloPacket(a)
+	if err != nil {
+		return
+	}
+	if oleh.RemoteIP != 0 {
+		c.globalIP = oleh.RemoteIP
+		slog.Debug("yp: oleh received", "addr", c.addr, "global_ip", ipToString(oleh.RemoteIP))
+		if c.OnGlobalIP != nil {
+			c.OnGlobalIP(oleh.RemoteIP)
 		}
 	}
 }
 
 func (c *Client) buildHelo() *pcp.Atom {
-	return pcp.NewParentAtom(pcp.PCPHelo,
-		pcp.NewStringAtom(pcp.PCPHeloAgent, version.AgentName),
-		pcp.NewIntAtom(pcp.PCPHeloVersion, version.PCPVersion),
-		pcp.NewIDAtom(pcp.PCPHeloSessionID, c.sessionID),
-		pcp.NewShortAtom(pcp.PCPHeloPort, c.listenPort),
-		pcp.NewShortAtom(pcp.PCPHeloPing, c.listenPort),
-		pcp.NewIDAtom(pcp.PCPHeloBCID, c.broadcastID),
-	)
+	h := pcp.HeloPacket{
+		Agent:     version.AgentName,
+		Version:   version.PCPVersion,
+		SessionID: c.sessionID,
+		Port:      c.listenPort,
+		Ping:      c.listenPort,
+		BCID:      c.broadcastID,
+	}
+	return h.BuildHeloAtom()
 }
 
 func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
@@ -253,17 +255,13 @@ func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
 	track := ch.Track()
 
 	ci := info.ToPCP()
-	chanInfo := ci.BuildAtom()
-
 	ct := track.ToPCP()
-	chanTrack := ct.BuildAtom()
-
-	chanAtom := pcp.NewParentAtom(pcp.PCPChan,
-		pcp.NewIDAtom(pcp.PCPChanID, ch.ID),
-		pcp.NewIDAtom(pcp.PCPChanBCID, ch.BroadcastID()),
-		chanInfo,
-		chanTrack,
-	)
+	chanAtom := (&pcp.ChanPacket{
+		ID:          ch.ID,
+		BroadcastID: ch.BroadcastID(),
+		Info:        &ci,
+		Track:       &ct,
+	}).BuildAtom()
 
 	hp := pcputil.HostAtomParams{
 		SessionID:    c.sessionID,
@@ -300,15 +298,11 @@ func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
 }
 
 func parseRoot(a *pcp.Atom) (interval uint32, immediate bool) {
-	if v := a.FindChild(pcp.PCPRootUpdInt); v != nil {
-		if n, err := v.GetInt(); err == nil {
-			interval = n
-		}
+	root, err := pcp.ParseRootPacket(a)
+	if err != nil {
+		return
 	}
-	if a.FindChild(pcp.PCPRootUpdate) != nil {
-		immediate = true
-	}
-	return
+	return root.UpdateInterval, root.Update != nil
 }
 
 func ipToString(ip uint32) string {
@@ -330,7 +324,10 @@ func parseHostPort(addr string) (ip uint32, port uint16, err error) {
 	if v4 == nil {
 		return 0, 0, fmt.Errorf("not IPv4: %s", host)
 	}
-	ip = pcp.IPv4ToUint32(v4)
+	ip, err = pcp.IPv4ToUint32(v4)
+	if err != nil {
+		return 0, 0, fmt.Errorf("IPv4ToUint32: %w", err)
+	}
 	p, err := net.LookupPort("tcp", portStr)
 	if err != nil {
 		return 0, 0, err

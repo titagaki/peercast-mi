@@ -82,7 +82,8 @@ func TestIPToUint32_NonTCPAddr(t *testing.T) {
 // TestBuildChanInfoAtom は PCPChanInfo タグを持つアトムが生成されることを確認する。
 func TestBuildChanInfoAtom(t *testing.T) {
 	info := channel.ChannelInfo{Name: "test", Genre: "music", Bitrate: 128}
-	a := buildChanInfoAtom(info)
+	ci := info.ToPCP()
+	a := ci.BuildAtom()
 	if a.Tag != pcp.PCPChanInfo {
 		t.Errorf("Tag: got %v, want PCPChanInfo", a.Tag)
 	}
@@ -91,7 +92,8 @@ func TestBuildChanInfoAtom(t *testing.T) {
 // TestBuildChanTrackAtom は PCPChanTrack タグを持つアトムが生成されることを確認する。
 func TestBuildChanTrackAtom(t *testing.T) {
 	track := channel.TrackInfo{Title: "My Track", Creator: "Artist"}
-	a := buildChanTrackAtom(track)
+	ct := track.ToPCP()
+	a := ct.BuildAtom()
 	if a.Tag != pcp.PCPChanTrack {
 		t.Errorf("Tag: got %v, want PCPChanTrack", a.Tag)
 	}

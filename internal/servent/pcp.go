@@ -117,17 +117,13 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 		return 0, fmt.Errorf("expected helo, got %s", heloAtom.Tag)
 	}
 
-	// Validate helo: sid and ver are mandatory per PCP spec.
-	sidAtom := heloAtom.FindChild(pcp.PCPHeloSessionID)
-	if sidAtom == nil {
-		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorNotIdentified)
-		return 0, fmt.Errorf("no session ID in helo")
-	}
-	peerID, err := sidAtom.GetID()
+	// Parse and validate helo.
+	helo, err := pcp.ParseHeloPacket(heloAtom)
 	if err != nil {
 		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorNotIdentified)
-		return 0, fmt.Errorf("invalid session ID: %w", err)
+		return 0, fmt.Errorf("parse helo: %w", err)
 	}
+	peerID := helo.SessionID
 	o.peerID = peerID
 	if peerID == o.sessionID {
 		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorLoopback)
@@ -138,40 +134,35 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorNotIdentified)
 		return 0, fmt.Errorf("not identified")
 	}
-	verAtom := heloAtom.FindChild(pcp.PCPHeloVersion)
-	if verAtom == nil {
+	if helo.Version == 0 {
 		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorBadAgent)
 		return 0, fmt.Errorf("no version in helo")
 	}
-	if v, err := verAtom.GetInt(); err == nil && v < 1200 {
+	if helo.Version < 1200 {
 		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorBadAgent)
-		return 0, fmt.Errorf("bad agent version %d", v)
+		return 0, fmt.Errorf("bad agent version %d", helo.Version)
 	}
 
 	// Determine remote port from helo: ping (active check) > port (claimed).
 	remoteIP := ipToUint32(o.conn.RemoteAddr())
 	var remotePort uint16
-	if pingAtom := heloAtom.FindChild(pcp.PCPHeloPing); pingAtom != nil {
-		if pingPort, err := pingAtom.GetShort(); err == nil && pingPort != 0 {
-			remoteAddr := o.conn.RemoteAddr().(*net.TCPAddr)
-			if pingHost(remoteAddr.IP, pingPort, peerID, o.sessionID) {
-				remotePort = pingPort
-			}
+	if helo.Ping != 0 {
+		remoteAddr := o.conn.RemoteAddr().(*net.TCPAddr)
+		if pingHost(remoteAddr.IP, helo.Ping, peerID, o.sessionID) {
+			remotePort = helo.Ping
 		}
-	} else if portAtom := heloAtom.FindChild(pcp.PCPHeloPort); portAtom != nil {
-		if p, err := portAtom.GetShort(); err == nil {
-			remotePort = p
-		}
+	} else if helo.Port != 0 {
+		remotePort = helo.Port
 	}
 
 	// Send oleh.
-	oleh := pcp.NewParentAtom(pcp.PCPOleh,
-		pcp.NewStringAtom(pcp.PCPHeloAgent, version.AgentName),
-		pcp.NewIDAtom(pcp.PCPHeloSessionID, o.sessionID),
-		pcp.NewIntAtom(pcp.PCPHeloVersion, version.PCPVersion),
-		pcp.NewIntAtom(pcp.PCPHeloRemoteIP, remoteIP),
-		pcp.NewShortAtom(pcp.PCPHeloPort, remotePort),
-	)
+	oleh := (&pcp.HeloPacket{
+		Agent:     version.AgentName,
+		SessionID: o.sessionID,
+		Version:   version.PCPVersion,
+		RemoteIP:  remoteIP,
+		Port:      remotePort,
+	}).BuildOlehAtom()
 	if err := oleh.Write(o.conn); err != nil {
 		return 0, fmt.Errorf("write oleh: %w", err)
 	}
@@ -305,16 +296,15 @@ func (o *PCPOutputStream) sendDataPackets(packets []channel.Content, pos uint32,
 		}
 		waitingForKeyframe = false
 
-		pktAtom := pcp.NewParentAtom(pcp.PCPChanPkt,
-			pcp.NewID4Atom(pcp.PCPChanPktType, pcp.NewID4("data")),
-			pcp.NewIntAtom(pcp.PCPChanPktPos, pkt.Pos),
-			pcp.NewBytesAtom(pcp.PCPChanPktData, pkt.Data),
-			pcp.NewByteAtom(pcp.PCPChanPktContinuation, pkt.ContFlags),
-		)
-		atom := pcp.NewParentAtom(pcp.PCPChan,
-			pcp.NewIDAtom(pcp.PCPChanID, o.ch.ID),
-			pktAtom,
-		)
+		atom := (&pcp.ChanPacket{
+			ID: o.ch.ID,
+			Pkt: &pcp.ChanPktData{
+				Type:         pcp.NewID4("data"),
+				Pos:          pkt.Pos,
+				Data:         pkt.Data,
+				Continuation: pkt.ContFlags,
+			},
+		}).BuildAtom()
 		o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 		if err := atom.Write(o.conn); err != nil {
 			slog.Debug("pcp: write error, closing", "remote", o.remoteAddr, "id", o.id, "pos", pkt.Pos, "err", err)
@@ -354,11 +344,8 @@ func (o *PCPOutputStream) drainNotifications() error {
 }
 
 func (o *PCPOutputStream) sendInfoUpdate() error {
-	info := o.ch.Info()
-	atom := pcp.NewParentAtom(pcp.PCPChan,
-		pcp.NewIDAtom(pcp.PCPChanID, o.ch.ID),
-		buildChanInfoAtom(info),
-	)
+	ci := o.ch.Info().ToPCP()
+	atom := (&pcp.ChanPacket{ID: o.ch.ID, Info: &ci}).BuildAtom()
 	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 	err := atom.Write(o.conn)
 	o.conn.SetWriteDeadline(time.Time{})
@@ -366,11 +353,8 @@ func (o *PCPOutputStream) sendInfoUpdate() error {
 }
 
 func (o *PCPOutputStream) sendTrackUpdate() error {
-	track := o.ch.Track()
-	atom := pcp.NewParentAtom(pcp.PCPChan,
-		pcp.NewIDAtom(pcp.PCPChanID, o.ch.ID),
-		buildChanTrackAtom(track),
-	)
+	ct := o.ch.Track().ToPCP()
+	atom := (&pcp.ChanPacket{ID: o.ch.ID, Track: &ct}).BuildAtom()
 	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 	err := atom.Write(o.conn)
 	o.conn.SetWriteDeadline(time.Time{})
@@ -379,10 +363,14 @@ func (o *PCPOutputStream) sendTrackUpdate() error {
 
 func (o *PCPOutputStream) sendHeaderUpdate() error {
 	header, hpos := o.ch.Header()
-	atom := pcp.NewParentAtom(pcp.PCPChan,
-		pcp.NewIDAtom(pcp.PCPChanID, o.ch.ID),
-		buildPktHeadAtom(header, hpos),
-	)
+	atom := (&pcp.ChanPacket{
+		ID: o.ch.ID,
+		Pkt: &pcp.ChanPktData{
+			Type: pcp.NewID4("head"),
+			Pos:  hpos,
+			Data: header,
+		},
+	}).BuildAtom()
 	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 	err := atom.Write(o.conn)
 	o.conn.SetWriteDeadline(time.Time{})
@@ -485,32 +473,27 @@ func (o *PCPOutputStream) sendQuit(code uint32) {
 // ---------------------------------------------------------------------------
 
 func buildChanAtom(chanID, bcID pcp.GnuID, info channel.ChannelInfo, track channel.TrackInfo, header []byte, headerPos uint32) *pcp.Atom {
-	pktAtom := buildPktHeadAtom(header, headerPos)
-	return pcp.NewParentAtom(pcp.PCPChan,
-		pcp.NewIDAtom(pcp.PCPChanID, chanID),
-		pcp.NewIDAtom(pcp.PCPChanBCID, bcID),
-		buildChanInfoAtom(info),
-		buildChanTrackAtom(track),
-		pktAtom,
-	)
-}
-
-func buildChanInfoAtom(info channel.ChannelInfo) *pcp.Atom {
 	ci := info.ToPCP()
-	return ci.BuildAtom()
-}
-
-func buildChanTrackAtom(track channel.TrackInfo) *pcp.Atom {
 	ct := track.ToPCP()
-	return ct.BuildAtom()
+	return (&pcp.ChanPacket{
+		ID:          chanID,
+		BroadcastID: bcID,
+		Info:        &ci,
+		Track:       &ct,
+		Pkt: &pcp.ChanPktData{
+			Type: pcp.NewID4("head"),
+			Pos:  headerPos,
+			Data: header,
+		},
+	}).BuildAtom()
 }
 
 func buildPktHeadAtom(header []byte, pos uint32) *pcp.Atom {
-	return pcp.NewParentAtom(pcp.PCPChanPkt,
-		pcp.NewID4Atom(pcp.PCPChanPktType, pcp.NewID4("head")),
-		pcp.NewIntAtom(pcp.PCPChanPktPos, pos),
-		pcp.NewBytesAtom(pcp.PCPChanPktData, header),
-	)
+	return (&pcp.ChanPktData{
+		Type: pcp.NewID4("head"),
+		Pos:  pos,
+		Data: header,
+	}).BuildAtom()
 }
 
 func notify(ch chan struct{}) {
@@ -525,7 +508,8 @@ func ipToUint32(addr net.Addr) uint32 {
 	if !ok {
 		return 0
 	}
-	return pcp.IPv4ToUint32(tcp.IP)
+	v, _ := pcp.IPv4ToUint32(tcp.IP)
+	return v
 }
 
 const pingTimeout = 2 * time.Second
@@ -554,27 +538,24 @@ func pingHost(remoteIP net.IP, port uint16, peerID, mySessionID pcp.GnuID) bool 
 	}
 
 	// Send helo with our session ID.
-	helo := pcp.NewParentAtom(pcp.PCPHelo,
-		pcp.NewIDAtom(pcp.PCPHeloSessionID, mySessionID),
-	)
+	helo := (&pcp.HeloPacket{
+		SessionID: mySessionID,
+	}).BuildHeloAtom()
 	if err := helo.Write(conn); err != nil {
 		return false
 	}
 
 	// Read oleh.
 	br := bufio.NewReader(conn)
-	oleh, err := pcp.ReadAtom(br)
-	if err != nil || oleh.Tag != pcp.PCPOleh {
+	olehAtom, err := pcp.ReadAtom(br)
+	if err != nil || olehAtom.Tag != pcp.PCPOleh {
 		return false
 	}
-	sidAtom := oleh.FindChild(pcp.PCPHeloSessionID)
-	if sidAtom == nil {
-		return false
-	}
-	sid, err := sidAtom.GetID()
+	oleh, err := pcp.ParseHeloPacket(olehAtom)
 	if err != nil {
 		return false
 	}
+	sid := oleh.SessionID
 	if sid == peerID {
 		slog.Debug("ping: succeeded", "addr", addr)
 		return true

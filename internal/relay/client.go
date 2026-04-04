@@ -164,12 +164,12 @@ func (c *Client) handshake(conn net.Conn) (*bufio.Reader, error) {
 	// 2. Send helo atom.
 	// Note: the pcp\n PCP_CONNECT magic is sent only for direct TCP connections
 	// (not HTTP-upgraded /channel/ requests), so it is intentionally omitted here.
-	helo := pcp.NewParentAtom(pcp.PCPHelo,
-		pcp.NewStringAtom(pcp.PCPHeloAgent, version.AgentName),
-		pcp.NewIDAtom(pcp.PCPHeloSessionID, c.sessionID),
-		pcp.NewIntAtom(pcp.PCPHeloVersion, version.PCPVersion),
-		pcp.NewShortAtom(pcp.PCPHeloPort, c.listenPort),
-	)
+	helo := (&pcp.HeloPacket{
+		Agent:     version.AgentName,
+		SessionID: c.sessionID,
+		Version:   version.PCPVersion,
+		Port:      c.listenPort,
+	}).BuildHeloAtom()
 	if err := helo.Write(conn); err != nil {
 		return nil, fmt.Errorf("write helo: %w", err)
 	}
@@ -305,63 +305,36 @@ func parseRelayHost(atom *pcp.Atom) string {
 }
 
 func (c *Client) handleChan(atom *pcp.Atom) {
-	for _, child := range atom.Children() {
-		switch child.Tag {
-		case pcp.PCPChanBCID:
-			if bcID, err := child.GetID(); err == nil {
-				c.ch.SetBroadcastID(bcID)
-			}
-		case pcp.PCPChanInfo:
-			c.ch.SetInfo(parseChanInfo(child))
-		case pcp.PCPChanTrack:
-			c.ch.SetTrack(parseChanTrack(child))
-		case pcp.PCPChanPkt:
-			c.handlePkt(child)
-		}
+	ch, err := pcp.ParseChanPacket(atom)
+	if err != nil {
+		return
+	}
+	if !ch.BroadcastID.IsEmpty() {
+		c.ch.SetBroadcastID(ch.BroadcastID)
+	}
+	if ch.Info != nil {
+		c.ch.SetInfo(channel.ChannelInfoFromPCP(*ch.Info))
+	}
+	if ch.Track != nil {
+		c.ch.SetTrack(channel.TrackInfoFromPCP(*ch.Track))
+	}
+	if ch.Pkt != nil {
+		c.handlePkt(ch.Pkt)
 	}
 }
 
-func (c *Client) handlePkt(pkt *pcp.Atom) {
-	typeAtom := pkt.FindChild(pcp.PCPChanPktType)
-	posAtom := pkt.FindChild(pcp.PCPChanPktPos)
-	if typeAtom == nil || posAtom == nil {
-		return
-	}
-	pktType, err := typeAtom.GetID4()
-	if err != nil {
-		return
-	}
-	pos, err := posAtom.GetInt()
-	if err != nil {
-		return
-	}
-
-	switch pktType {
+func (c *Client) handlePkt(p *pcp.ChanPktData) {
+	switch p.Type {
 	case pktTypeHead:
-		if dataAtom := pkt.FindChild(pcp.PCPChanPktData); dataAtom != nil {
-			c.ch.SetHeader(dataAtom.Data())
+		if len(p.Data) > 0 {
+			c.ch.SetHeader(p.Data)
 		}
 	case pktTypeData:
-		dataAtom := pkt.FindChild(pcp.PCPChanPktData)
-		if dataAtom == nil {
+		if len(p.Data) == 0 {
 			return
 		}
-		var contFlags byte
-		if contAtom := pkt.FindChild(pcp.PCPChanPktContinuation); contAtom != nil {
-			if b, err := contAtom.GetByte(); err == nil {
-				contFlags = b
-			}
-		}
-		c.ch.Write(dataAtom.Data(), pos, contFlags)
+		c.ch.Write(p.Data, p.Pos, p.Continuation)
 	}
-}
-
-func parseChanInfo(a *pcp.Atom) channel.ChannelInfo {
-	return channel.ChannelInfoFromPCP(pcp.ParseChanInfo(a))
-}
-
-func parseChanTrack(a *pcp.Atom) channel.TrackInfo {
-	return channel.TrackInfoFromPCP(pcp.ParseChanTrack(a))
 }
 
 // bcstHostLoop sends BCST HOST atoms upstream periodically so that
@@ -421,7 +394,8 @@ func connRemoteIPPort(conn net.Conn) (uint32, uint16) {
 	if !ok {
 		return 0, 0
 	}
-	return pcp.IPv4ToUint32(tcp.IP), uint16(tcp.Port)
+	v, _ := pcp.IPv4ToUint32(tcp.IP)
+	return v, uint16(tcp.Port)
 }
 
 // readHTTPStatus reads the HTTP status line and all headers from br,
