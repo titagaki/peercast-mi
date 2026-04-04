@@ -270,7 +270,7 @@ func TestReceiveLoop_QuitAtom(t *testing.T) {
 	}()
 
 	br := bufio.NewReader(clientConn)
-	_, err := c.receiveLoop(clientConn, br)
+	_, err := c.processBody(clientConn, br)
 	if err == nil {
 		t.Fatal("expected error on quit")
 	}
@@ -289,7 +289,7 @@ func TestReceiveLoop_Stop(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		br := bufio.NewReader(clientConn)
-		_, err := c.receiveLoop(clientConn, br)
+		_, err := c.processBody(clientConn, br)
 		done <- err
 	}()
 
@@ -329,7 +329,7 @@ func TestReceiveLoop_ChanAtom(t *testing.T) {
 	}()
 
 	br := bufio.NewReader(clientConn)
-	_, _ = c.receiveLoop(clientConn, br)
+	_, _ = c.processBody(clientConn, br)
 
 	if ch.Info().Name != "Relay Test" {
 		t.Errorf("Info.Name = %q, want %q", ch.Info().Name, "Relay Test")

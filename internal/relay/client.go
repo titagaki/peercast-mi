@@ -33,7 +33,7 @@ var (
 )
 
 const (
-	bcstInterval     = 30 * time.Second
+	bcstInterval     = 120 * time.Second
 	bcstWriteTimeout = 10 * time.Second
 )
 
@@ -171,9 +171,13 @@ func (c *Client) connectTo(addr string) (stopReason, error) {
 	}
 	defer conn.Close()
 
-	br, err := c.handshake(conn, addr)
+	statusCode, br, err := c.handshake(conn, addr)
 	if err != nil {
 		return stopReasonError, err
+	}
+
+	if statusCode == 503 {
+		return c.processHosts(conn, br)
 	}
 
 	// Send periodic BCST HOST atoms upstream so intermediate nodes can
@@ -183,18 +187,26 @@ func (c *Client) connectTo(addr string) (stopReason, error) {
 	go c.bcstHostLoop(conn, localIP, bcstStop)
 	defer close(bcstStop)
 
-	return c.receiveLoop(conn, br)
+	reason, err := c.processBody(conn, br)
+
+	// Send PCP_QUIT on disconnect (best-effort, 3-second timeout).
+	quitAtom := pcp.NewIntAtom(pcp.PCPQuit, pcp.PCPErrorQuit+pcp.PCPErrorShutdown)
+	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	quitAtom.Write(conn)
+	conn.SetWriteDeadline(time.Time{})
+
+	return reason, err
 }
 
 // handshake performs the PCP relay handshake over an established connection:
 // sends the HTTP GET + helo atom, reads the HTTP response + oleh atom.
-func (c *Client) handshake(conn net.Conn, addr string) (*bufio.Reader, error) {
+func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, error) {
 	chanIDHex := hex.EncodeToString(c.channelID[:])
 
 	// 1. Send HTTP GET /channel/<id> with PCP upgrade header.
 	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: 1\r\nx-peercast-pos: 0\r\n\r\n", chanIDHex, addr)
 	if _, err := io.WriteString(conn, req); err != nil {
-		return nil, fmt.Errorf("write GET: %w", err)
+		return 0, nil, fmt.Errorf("write GET: %w", err)
 	}
 
 	// 2. Send helo atom.
@@ -207,7 +219,7 @@ func (c *Client) handshake(conn net.Conn, addr string) (*bufio.Reader, error) {
 		Port:      c.listenPort,
 	}).BuildHeloAtom()
 	if err := helo.Write(conn); err != nil {
-		return nil, fmt.Errorf("write helo: %w", err)
+		return 0, nil, fmt.Errorf("write helo: %w", err)
 	}
 
 	br := bufio.NewReader(conn)
@@ -215,26 +227,28 @@ func (c *Client) handshake(conn net.Conn, addr string) (*bufio.Reader, error) {
 	// 3. Read HTTP response headers.
 	statusCode, err := readHTTPStatus(br)
 	if err != nil {
-		return nil, fmt.Errorf("read HTTP response: %w", err)
+		return 0, nil, fmt.Errorf("read HTTP response: %w", err)
 	}
 	if statusCode != 200 && statusCode != 503 {
-		return nil, fmt.Errorf("upstream returned HTTP %d", statusCode)
+		return statusCode, nil, fmt.Errorf("upstream returned HTTP %d", statusCode)
 	}
 
 	// 4. Read oleh atom.
 	oleh, err := pcp.ReadAtom(br)
 	if err != nil {
-		return nil, fmt.Errorf("read oleh: %w", err)
+		return 0, nil, fmt.Errorf("read oleh: %w", err)
 	}
 	if oleh.Tag != pcp.PCPOleh {
-		return nil, fmt.Errorf("expected oleh, got %s", oleh.Tag)
+		return 0, nil, fmt.Errorf("expected oleh, got %s", oleh.Tag)
 	}
 
 	slog.Info("relay: connected", "addr", addr, "channel", chanIDHex)
-	return br, nil
+	return statusCode, br, nil
 }
 
-func (c *Client) receiveLoop(conn net.Conn, br *bufio.Reader) (stopReason, error) {
+// processBody handles the main receive loop for a 200 (connected) relay.
+// It processes all atom types: PCP_CHAN, PCP_HOST, PCP_BCST, PCP_OK, PCP_QUIT.
+func (c *Client) processBody(conn net.Conn, br *bufio.Reader) (stopReason, error) {
 	receivedData := false
 	for {
 		select {
@@ -267,10 +281,52 @@ func (c *Client) receiveLoop(conn net.Conn, br *bufio.Reader) (stopReason, error
 			if node, ok := parseSourceNode(atom); ok {
 				c.sourceNodes.Add(node)
 			}
+		case pcp.PCPBcst:
+			c.handleBcst(atom)
+		case pcp.PCPOK:
+			// No-op (matches PeerCastStation).
 		case pcp.PCPQuit:
 			code, _ := atom.GetInt()
 			reason := stopReasonOffAir
-			if code == 1003 {
+			if code == pcp.PCPErrorQuit+pcp.PCPErrorUnavailable {
+				reason = stopReasonUnavailable
+			}
+			return reason, fmt.Errorf("quit from upstream (code %d)", code)
+		}
+	}
+}
+
+// processHosts handles a 503 response: only PCP_HOST and PCP_QUIT are
+// processed. No BCST HOST atoms are sent upstream.
+func (c *Client) processHosts(conn net.Conn, br *bufio.Reader) (stopReason, error) {
+	for {
+		select {
+		case <-c.stopCh:
+			return stopReasonOffAir, nil
+		default:
+		}
+
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
+		atom, err := pcp.ReadAtom(br)
+		conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			select {
+			case <-c.stopCh:
+				return stopReasonOffAir, nil
+			default:
+			}
+			return stopReasonError, fmt.Errorf("read atom: %w", err)
+		}
+
+		switch atom.Tag {
+		case pcp.PCPHost:
+			if node, ok := parseSourceNode(atom); ok {
+				c.sourceNodes.Add(node)
+			}
+		case pcp.PCPQuit:
+			code, _ := atom.GetInt()
+			reason := stopReasonOffAir
+			if code == pcp.PCPErrorQuit+pcp.PCPErrorUnavailable {
 				reason = stopReasonUnavailable
 			}
 			return reason, fmt.Errorf("quit from upstream (code %d)", code)
@@ -298,6 +354,21 @@ func (c *Client) handleChan(atom *pcp.Atom) {
 	}
 }
 
+// handleBcst processes a PCP_BCST atom by extracting child atoms
+// (PCP_HOST, PCP_CHAN, etc.) and processing them locally.
+func (c *Client) handleBcst(atom *pcp.Atom) {
+	for _, child := range atom.Children() {
+		switch child.Tag {
+		case pcp.PCPHost:
+			if node, ok := parseSourceNode(child); ok {
+				c.sourceNodes.Add(node)
+			}
+		case pcp.PCPChan:
+			c.handleChan(child)
+		}
+	}
+}
+
 func (c *Client) handlePkt(p *pcp.ChanPktData) {
 	switch p.Type {
 	case pktTypeHead:
@@ -312,19 +383,36 @@ func (c *Client) handlePkt(p *pcp.ChanPktData) {
 	}
 }
 
-// bcstHostLoop sends BCST HOST atoms upstream periodically so that
-// intermediate nodes can build the relay tree with peercast-mi's version info.
+// bcstHostLoop sends BCST HOST atoms upstream periodically (every 120s) or
+// when the local listener/relay count changes, matching PeerCastStation's
+// CheckHostInfoUpdate logic.
 func (c *Client) bcstHostLoop(conn net.Conn, localIP uint32, stop <-chan struct{}) {
 	uphostIP, uphostPort := connRemoteIPPort(conn)
+	lastListeners := c.ch.NumListeners()
+	lastRelays := c.ch.NumRelays()
 	c.writeBcstHost(conn, localIP, uphostIP, uphostPort)
+
 	t := time.NewTicker(bcstInterval)
 	defer t.Stop()
+	// Check for stat changes more frequently than the full interval.
+	statCheck := time.NewTicker(5 * time.Second)
+	defer statCheck.Stop()
+
 	for {
 		select {
 		case <-stop:
 			return
 		case <-t.C:
+			lastListeners = c.ch.NumListeners()
+			lastRelays = c.ch.NumRelays()
 			c.writeBcstHost(conn, localIP, uphostIP, uphostPort)
+		case <-statCheck.C:
+			l, r := c.ch.NumListeners(), c.ch.NumRelays()
+			if l != lastListeners || r != lastRelays {
+				lastListeners, lastRelays = l, r
+				c.writeBcstHost(conn, localIP, uphostIP, uphostPort)
+				t.Reset(bcstInterval)
+			}
 		}
 	}
 }
