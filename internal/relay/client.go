@@ -446,9 +446,12 @@ func (c *Client) buildRelayBcstAtom(localIP, uphostIP uint32, uphostPort uint16)
 		pcp.NewByteAtom(pcp.PCPBcstTTL, 7),
 		pcp.NewByteAtom(pcp.PCPBcstHops, 0),
 		pcp.NewIDAtom(pcp.PCPBcstFrom, c.sessionID),
-		pcp.NewByteAtom(pcp.PCPBcstGroup, byte(pcp.PCPBcstGroupRoot)),
+		pcp.NewByteAtom(pcp.PCPBcstGroup, byte(pcp.PCPBcstGroupRelays)),
 		pcp.NewIDAtom(pcp.PCPBcstChanID, c.channelID),
 		pcp.NewIntAtom(pcp.PCPBcstVersion, version.PCPVersion),
+		pcp.NewIntAtom(pcp.PCPBcstVersionVP, version.PCPVersionVP),
+		pcp.NewBytesAtom(pcp.PCPBcstVersionExPrefix, []byte(version.ExPrefix)),
+		pcp.NewShortAtom(pcp.PCPBcstVersionExNumber, version.ExNumber()),
 		hostAtom,
 	)
 }
