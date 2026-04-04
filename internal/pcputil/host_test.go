@@ -30,16 +30,16 @@ func TestBuildHostAtom_Basic(t *testing.T) {
 		t.Fatalf("tag: got %s, want %s", atom.Tag, pcp.PCPHost)
 	}
 
-	// Two ip/port pairs: local (1st) + global (2nd).
+	// Two ip/port pairs: global (1st) + local (2nd).
 	ips := atom.FindChildren(pcp.PCPHostIP)
 	if len(ips) != 2 {
 		t.Fatalf("PCPHostIP: got %d atoms, want 2", len(ips))
 	}
-	if v, _ := ips[0].GetInt(); v != 0x0A000001 {
-		t.Errorf("PCPHostIP (local): got 0x%08X, want 0x0A000001", v)
-	}
-	if v, _ := ips[1].GetInt(); v != 0xC0A80001 {
+	if v, _ := ips[0].GetInt(); v != 0xC0A80001 {
 		t.Errorf("PCPHostIP (global): got 0x%08X, want 0xC0A80001", v)
+	}
+	if v, _ := ips[1].GetInt(); v != 0x0A000001 {
+		t.Errorf("PCPHostIP (local): got 0x%08X, want 0x0A000001", v)
 	}
 	ports := atom.FindChildren(pcp.PCPHostPort)
 	if len(ports) != 2 {

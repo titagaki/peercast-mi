@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	bcstTTL         = 7
+	bcstTTL         = 11
 	defaultPCPPort  = 7144
 	retryInitial    = 5 * time.Second
 	retryMax        = 120 * time.Second
@@ -299,6 +299,9 @@ func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
 		pcp.NewByteAtom(pcp.PCPBcstGroup, byte(pcp.PCPBcstGroupRoot)),
 		pcp.NewIDAtom(pcp.PCPBcstChanID, ch.ID),
 		pcp.NewIntAtom(pcp.PCPBcstVersion, version.PCPVersion),
+		pcp.NewIntAtom(pcp.PCPBcstVersionVP, version.PCPVersionVP),
+		pcp.NewBytesAtom(pcp.PCPBcstVersionExPrefix, []byte(version.ExPrefix)),
+		pcp.NewShortAtom(pcp.PCPBcstVersionExNumber, version.ExNumber()),
 		chanAtom,
 		hostAtom,
 	)

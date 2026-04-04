@@ -33,8 +33,8 @@ type HostAtomParams struct {
 // BuildHostAtom constructs a PCPHost atom from the given parameters.
 //
 // PeerCastStation expects two ip/port pairs in a Host atom: the first is
-// interpreted as the local (LAN) endpoint and the second as the global
-// (public) endpoint. HostPacket.BuildAtom() only emits one pair, so we
+// interpreted as the global (public) endpoint and the second as the local
+// (LAN) endpoint. HostPacket.BuildAtom() only emits one pair, so we
 // build the atom manually here.
 func BuildHostAtom(p HostAtomParams) *pcp.Atom {
 	flags := byte(pcp.PCPHostFlags1Relay | pcp.PCPHostFlags1Recv | pcp.PCPHostFlags1CIN)
@@ -47,11 +47,11 @@ func BuildHostAtom(p HostAtomParams) *pcp.Atom {
 
 	children := []*pcp.Atom{
 		pcp.NewIDAtom(pcp.PCPHostID, p.SessionID),
-		// 1st ip/port pair — local (LAN) endpoint
-		pcp.NewIntAtom(pcp.PCPHostIP, p.LocalIP),
-		pcp.NewShortAtom(pcp.PCPHostPort, p.ListenPort),
-		// 2nd ip/port pair — global (public) endpoint
+		// 1st ip/port pair — global (public) endpoint
 		pcp.NewIntAtom(pcp.PCPHostIP, p.GlobalIP),
+		pcp.NewShortAtom(pcp.PCPHostPort, p.ListenPort),
+		// 2nd ip/port pair — local (LAN) endpoint
+		pcp.NewIntAtom(pcp.PCPHostIP, p.LocalIP),
 		pcp.NewShortAtom(pcp.PCPHostPort, p.ListenPort),
 		pcp.NewIntAtom(pcp.PCPHostNumListeners, uint32(p.NumListeners)),
 		pcp.NewIntAtom(pcp.PCPHostNumRelays, uint32(p.NumRelays)),
