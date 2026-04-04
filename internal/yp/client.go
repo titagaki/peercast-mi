@@ -66,10 +66,12 @@ func New(addr string, sessionID, broadcastID pcp.GnuID, mgr ChannelLister, liste
 }
 
 // Run connects to the YP and runs the bcst loop, reconnecting on failure.
-// It waits until at least one broadcasting channel exists before connecting.
+// It waits until at least one channel (broadcasting or relay) exists before
+// connecting, so that relay-only nodes can learn their global IP from the
+// YP oleh response.
 func (c *Client) Run() {
 	defer close(c.doneCh)
-	if !c.waitForBroadcast() {
+	if !c.waitForChannel() {
 		return
 	}
 	delay := retryInitial
@@ -95,14 +97,13 @@ func (c *Client) Run() {
 	}
 }
 
-// waitForBroadcast blocks until there is at least one broadcasting channel,
-// or until the client is stopped. Returns false if stopped before any channel appeared.
-func (c *Client) waitForBroadcast() bool {
+// waitForChannel blocks until at least one channel (broadcasting or relay)
+// exists, or until the client is stopped. This allows relay-only nodes to
+// connect to the YP and learn their global IP from the oleh response.
+func (c *Client) waitForChannel() bool {
 	for {
-		for _, ch := range c.mgr.List() {
-			if ch.IsBroadcasting() {
-				return true
-			}
+		if len(c.mgr.List()) > 0 {
+			return true
 		}
 		select {
 		case <-c.stopCh:

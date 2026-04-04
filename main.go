@@ -86,8 +86,10 @@ func main() {
 		}
 		ypClient := yp.New(hostPort, sessionID, broadcastID, mgr, cfg.PeercastPort)
 		ypClient.OnGlobalIP = func(ip uint32) {
+			slog.Debug("global IP acquired", "ip", pcp.IPv4FromUint32(ip))
 			globalIP.Store(ip)
 			listener.SetGlobalIP(ip)
+			mgr.SetGlobalIPForRelays(ip)
 		}
 		ypBumper = ypClient
 		go func() {

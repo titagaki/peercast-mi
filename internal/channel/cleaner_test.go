@@ -92,7 +92,8 @@ func TestCleaner_DisabledWithZeroLimit(t *testing.T) {
 
 type fakeRelay struct{}
 
-func (f *fakeRelay) Stop() {}
+func (f *fakeRelay) Stop()                {}
+func (f *fakeRelay) SetGlobalIP(_ uint32) {}
 
 type fakeOutput struct {
 	typ    OutputStreamType

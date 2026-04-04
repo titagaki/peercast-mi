@@ -114,7 +114,11 @@ func (c *Client) Run() {
 
 		reason, err := c.connectTo(targetAddr)
 		if err != nil {
-			slog.Error("relay: connection error", "addr", targetAddr, "err", err)
+			if reason == stopReasonUnavailable {
+				slog.Warn("relay: connection error", "addr", targetAddr, "err", err)
+			} else {
+				slog.Error("relay: connection error", "addr", targetAddr, "err", err)
+			}
 		}
 
 		switch reason {

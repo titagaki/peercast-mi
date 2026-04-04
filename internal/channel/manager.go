@@ -13,6 +13,7 @@ import (
 // an import cycle between the channel and relay packages.
 type RelayHandle interface {
 	Stop()
+	SetGlobalIP(ip uint32)
 }
 
 // Manager manages stream keys and active broadcast channels.
@@ -218,6 +219,15 @@ func (m *Manager) TotalSendRate() int64 {
 		}
 	}
 	return total
+}
+
+// SetGlobalIPForRelays propagates the global IP to all active relay clients.
+func (m *Manager) SetGlobalIPForRelays(ip uint32) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, r := range m.relays {
+		r.SetGlobalIP(ip)
+	}
 }
 
 // channelIDForBroadcast deterministically generates a channel ID from the
