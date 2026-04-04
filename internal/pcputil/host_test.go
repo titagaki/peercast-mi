@@ -14,6 +14,7 @@ func TestBuildHostAtom_Basic(t *testing.T) {
 	cid := pcp.GnuID{4, 5, 6}
 	atom := BuildHostAtom(HostAtomParams{
 		SessionID:    sid,
+		LocalIP:      0x0A000001, // 10.0.0.1
 		GlobalIP:     0xC0A80001, // 192.168.0.1
 		ListenPort:   7144,
 		ChannelID:    cid,
@@ -27,6 +28,27 @@ func TestBuildHostAtom_Basic(t *testing.T) {
 
 	if atom.Tag != pcp.PCPHost {
 		t.Fatalf("tag: got %s, want %s", atom.Tag, pcp.PCPHost)
+	}
+
+	// Two ip/port pairs: local (1st) + global (2nd).
+	ips := atom.FindChildren(pcp.PCPHostIP)
+	if len(ips) != 2 {
+		t.Fatalf("PCPHostIP: got %d atoms, want 2", len(ips))
+	}
+	if v, _ := ips[0].GetInt(); v != 0x0A000001 {
+		t.Errorf("PCPHostIP (local): got 0x%08X, want 0x0A000001", v)
+	}
+	if v, _ := ips[1].GetInt(); v != 0xC0A80001 {
+		t.Errorf("PCPHostIP (global): got 0x%08X, want 0xC0A80001", v)
+	}
+	ports := atom.FindChildren(pcp.PCPHostPort)
+	if len(ports) != 2 {
+		t.Fatalf("PCPHostPort: got %d atoms, want 2", len(ports))
+	}
+	for i, p := range ports {
+		if v, _ := p.GetShort(); v != 7144 {
+			t.Errorf("PCPHostPort[%d]: got %d, want 7144", i, v)
+		}
 	}
 
 	// Check session ID.

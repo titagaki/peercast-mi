@@ -178,8 +178,9 @@ func (c *Client) connectTo(addr string) (stopReason, error) {
 
 	// Send periodic BCST HOST atoms upstream so intermediate nodes can
 	// populate their relay tree with peercast-mi's version info.
+	localIP := connLocalIP(conn)
 	bcstStop := make(chan struct{})
-	go c.bcstHostLoop(conn, bcstStop)
+	go c.bcstHostLoop(conn, localIP, bcstStop)
 	defer close(bcstStop)
 
 	return c.receiveLoop(conn, br)
@@ -313,9 +314,9 @@ func (c *Client) handlePkt(p *pcp.ChanPktData) {
 
 // bcstHostLoop sends BCST HOST atoms upstream periodically so that
 // intermediate nodes can build the relay tree with peercast-mi's version info.
-func (c *Client) bcstHostLoop(conn net.Conn, stop <-chan struct{}) {
+func (c *Client) bcstHostLoop(conn net.Conn, localIP uint32, stop <-chan struct{}) {
 	uphostIP, uphostPort := connRemoteIPPort(conn)
-	c.writeBcstHost(conn, uphostIP, uphostPort)
+	c.writeBcstHost(conn, localIP, uphostIP, uphostPort)
 	t := time.NewTicker(bcstInterval)
 	defer t.Stop()
 	for {
@@ -323,22 +324,23 @@ func (c *Client) bcstHostLoop(conn net.Conn, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
-			c.writeBcstHost(conn, uphostIP, uphostPort)
+			c.writeBcstHost(conn, localIP, uphostIP, uphostPort)
 		}
 	}
 }
 
-func (c *Client) writeBcstHost(conn net.Conn, uphostIP uint32, uphostPort uint16) {
-	atom := c.buildRelayBcstAtom(uphostIP, uphostPort)
+func (c *Client) writeBcstHost(conn net.Conn, localIP, uphostIP uint32, uphostPort uint16) {
+	atom := c.buildRelayBcstAtom(localIP, uphostIP, uphostPort)
 	conn.SetWriteDeadline(time.Now().Add(bcstWriteTimeout))
 	atom.Write(conn)
 	conn.SetWriteDeadline(time.Time{})
 }
 
-func (c *Client) buildRelayBcstAtom(uphostIP uint32, uphostPort uint16) *pcp.Atom {
+func (c *Client) buildRelayBcstAtom(localIP, uphostIP uint32, uphostPort uint16) *pcp.Atom {
 	globalIP := c.globalIP.Load()
 	hostAtom := pcputil.BuildHostAtom(pcputil.HostAtomParams{
 		SessionID:    c.sessionID,
+		LocalIP:      localIP,
 		GlobalIP:     globalIP,
 		ListenPort:   c.listenPort,
 		ChannelID:    c.channelID,
@@ -370,6 +372,15 @@ func connRemoteIPPort(conn net.Conn) (uint32, uint16) {
 	}
 	v, _ := pcp.IPv4ToUint32(tcp.IP)
 	return v, uint16(tcp.Port)
+}
+
+func connLocalIP(conn net.Conn) uint32 {
+	tcp, ok := conn.LocalAddr().(*net.TCPAddr)
+	if !ok {
+		return 0
+	}
+	v, _ := pcp.IPv4ToUint32(tcp.IP)
+	return v
 }
 
 // readHTTPStatus reads the HTTP status line and all headers from br,

@@ -37,6 +37,7 @@ type Client struct {
 	listenPort  uint16
 
 	globalIP uint32 // learned from oleh.rip
+	localIP  uint32 // local address of YP connection
 
 	// OnGlobalIP is called with the global IP address learned from the YP oleh.
 	// May be nil.
@@ -142,6 +143,10 @@ func (c *Client) run() (connected bool, err error) {
 		return false, fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+
+	if tcp, ok := conn.LocalAddr().(*net.TCPAddr); ok {
+		c.localIP, _ = pcp.IPv4ToUint32(tcp.IP)
+	}
 
 	// Send helo.
 	if err := conn.WriteAtom(c.buildHelo()); err != nil {
@@ -266,6 +271,7 @@ func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
 
 	hp := pcputil.HostAtomParams{
 		SessionID:    c.sessionID,
+		LocalIP:      c.localIP,
 		GlobalIP:     c.globalIP,
 		ListenPort:   c.listenPort,
 		ChannelID:    ch.ID,

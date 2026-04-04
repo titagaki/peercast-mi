@@ -190,8 +190,13 @@ func (o *PCPOutputStream) sendInitial() error {
 }
 
 func (o *PCPOutputStream) buildHostAtom() *pcp.Atom {
+	var localIP uint32
+	if tcp, ok := o.conn.LocalAddr().(*net.TCPAddr); ok {
+		localIP, _ = pcp.IPv4ToUint32(tcp.IP)
+	}
 	return pcputil.BuildHostAtom(pcputil.HostAtomParams{
 		SessionID:    o.sessionID,
+		LocalIP:      localIP,
 		GlobalIP:     o.globalIP,
 		ListenPort:   o.listenPort,
 		ChannelID:    o.ch.ID,

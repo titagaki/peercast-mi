@@ -315,19 +315,20 @@ func TestBuildBcst(t *testing.T) {
 	if gotID, err := hostIDAtom.GetID(); err != nil || gotID != sid {
 		t.Error("host.id should be sessionID")
 	}
-	hostIPAtom := hostAtom.FindChild(pcp.PCPHostIP)
-	if hostIPAtom == nil {
-		t.Fatal("missing host.ip")
+	// Host atom should contain two ip/port pairs: local (1st) + global (2nd).
+	hostIPs := hostAtom.FindChildren(pcp.PCPHostIP)
+	if len(hostIPs) < 2 {
+		t.Fatalf("host.ip: got %d atoms, want at least 2", len(hostIPs))
 	}
-	if v, err := hostIPAtom.GetInt(); err != nil || v != 0xC0A80001 {
-		t.Errorf("host.ip: got 0x%08X, want 0xC0A80001", v)
+	if v, err := hostIPs[1].GetInt(); err != nil || v != 0xC0A80001 {
+		t.Errorf("host.ip (global): got 0x%08X, want 0xC0A80001", v)
 	}
-	hostPortAtom := hostAtom.FindChild(pcp.PCPHostPort)
-	if hostPortAtom == nil {
-		t.Fatal("missing host.port")
+	hostPorts := hostAtom.FindChildren(pcp.PCPHostPort)
+	if len(hostPorts) < 2 {
+		t.Fatalf("host.port: got %d atoms, want at least 2", len(hostPorts))
 	}
-	if v, err := hostPortAtom.GetShort(); err != nil || v != 7144 {
-		t.Errorf("host.port: got %d, want 7144", v)
+	if v, err := hostPorts[1].GetShort(); err != nil || v != 7144 {
+		t.Errorf("host.port (global): got %d, want 7144", v)
 	}
 }
 
