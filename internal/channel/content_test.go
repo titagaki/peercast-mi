@@ -57,15 +57,25 @@ func TestContentBuffer_SetHeaderCopies(t *testing.T) {
 	}
 }
 
-// TestContentBuffer_HeaderPosAfterWrite は Write 後の SetHeader で
-// headerPos が最後のパケットの末尾を指すことを確認する。
-func TestContentBuffer_HeaderPosAfterWrite(t *testing.T) {
+// TestContentBuffer_SetHeaderResetsBuffer は SetHeader がリングバッファを
+// リセットし、旧ストリームのデータが残らないことを確認する。
+func TestContentBuffer_SetHeaderResetsBuffer(t *testing.T) {
 	var b ContentBuffer
-	b.Write([]byte{0xAA, 0xBB, 0xCC}, 100, 0) // pos=100, len=3 → 次のpos=103
+	b.Write([]byte{0xAA, 0xBB, 0xCC}, 100, 0)
 	b.SetHeader([]byte{0xFF})
+
+	// headerPos is reset to 0 because old packets are cleared.
 	_, pos := b.Header()
-	if pos != 103 {
-		t.Errorf("headerPos: got %d, want 103", pos)
+	if pos != 0 {
+		t.Errorf("headerPos: got %d, want 0", pos)
+	}
+
+	// Old data packets should be gone.
+	if b.HasData() {
+		t.Error("expected no data after SetHeader reset")
+	}
+	if pkts := b.Since(0); len(pkts) != 0 {
+		t.Errorf("expected 0 packets, got %d", len(pkts))
 	}
 }
 

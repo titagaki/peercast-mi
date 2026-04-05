@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bufio"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -9,7 +10,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -58,9 +58,9 @@ type Client struct {
 
 	globalIP atomic.Uint32 // learned from YP oleh
 
-	stopCh   chan struct{}
-	doneCh   chan struct{}
-	stopOnce sync.Once
+	ctx    context.Context
+	cancel context.CancelFunc
+	doneCh chan struct{}
 }
 
 // SetGlobalIP updates the global IP address reported in BCST HOST atoms.
@@ -70,6 +70,7 @@ func (c *Client) SetGlobalIP(ip uint32) {
 
 // New creates a new relay Client.
 func New(trackerAddr string, channelID, sessionID pcp.GnuID, listenPort uint16, ch *channel.Channel) *Client {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
 		trackerAddr:  trackerAddr,
 		channelID:    channelID,
@@ -78,7 +79,8 @@ func New(trackerAddr string, channelID, sessionID pcp.GnuID, listenPort uint16, 
 		ch:           ch,
 		sourceNodes:  NewSourceNodeList(),
 		ignoredNodes: NewIgnoredNodeCollection(),
-		stopCh:       make(chan struct{}),
+		ctx:          ctx,
+		cancel:       cancel,
 		doneCh:       make(chan struct{}),
 	}
 }
@@ -98,12 +100,17 @@ func New(trackerAddr string, channelID, sessionID pcp.GnuID, listenPort uint16, 
 //     retry on the next host. OffAir / Error from the tracker stops the client.
 func (c *Client) Run() {
 	defer close(c.doneCh)
+	// When Run exits permanently (all hosts exhausted or tracker off-air),
+	// close all output streams so downstream nodes are notified immediately
+	// rather than waiting for stall timeouts. This matches PeerCastStation's
+	// RemoveSourceStream → OnStopped → sinks clear flow.
+	// During reconnection between hosts within the loop, outputs are kept
+	// alive so viewers can continue watching if reconnection is fast.
+	defer c.ch.CloseAll()
 
 	for {
-		select {
-		case <-c.stopCh:
+		if c.ctx.Err() != nil {
 			return
-		default:
 		}
 
 		targetAddr := selectSourceHost(c.sourceNodes.List(), c.ignoredNodes, c.trackerAddr)
@@ -144,17 +151,31 @@ func (c *Client) Run() {
 }
 
 // Stop signals the client to shut down and waits for it to exit.
+// Cancelling the context interrupts in-flight DialContext and unblocks
+// blocking reads by closing the connection (see connectTo).
 func (c *Client) Stop() {
-	c.stopOnce.Do(func() { close(c.stopCh) })
+	c.cancel()
 	<-c.doneCh
 }
 
 func (c *Client) connectTo(addr string) (stopReason, error) {
-	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(c.ctx, "tcp", addr)
 	if err != nil {
 		return stopReasonError, fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+
+	// Close the connection when the context is cancelled so that blocking
+	// reads (pcp.ReadAtom) are interrupted immediately.
+	connDone := make(chan struct{})
+	defer close(connDone)
+	go func() {
+		select {
+		case <-c.ctx.Done():
+			conn.Close()
+		case <-connDone:
+		}
+	}()
 
 	statusCode, br, reason, err := c.handshake(conn, addr)
 	if err != nil {
@@ -246,20 +267,16 @@ func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, stop
 // It processes all atom types: PCP_CHAN, PCP_HOST, PCP_BCST, PCP_OK, PCP_QUIT.
 func (c *Client) processBody(conn net.Conn, br *bufio.Reader) (stopReason, error) {
 	for {
-		select {
-		case <-c.stopCh:
+		if c.ctx.Err() != nil {
 			return stopReasonOffAir, nil
-		default:
 		}
 
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		atom, err := pcp.ReadAtom(br)
 		conn.SetReadDeadline(time.Time{})
 		if err != nil {
-			select {
-			case <-c.stopCh:
+			if c.ctx.Err() != nil {
 				return stopReasonOffAir, nil
-			default:
 			}
 			return stopReasonError, fmt.Errorf("read atom: %w", err)
 		}
@@ -290,20 +307,16 @@ func (c *Client) processBody(conn net.Conn, br *bufio.Reader) (stopReason, error
 // processed. No BCST HOST atoms are sent upstream.
 func (c *Client) processHosts(conn net.Conn, br *bufio.Reader) (stopReason, error) {
 	for {
-		select {
-		case <-c.stopCh:
+		if c.ctx.Err() != nil {
 			return stopReasonOffAir, nil
-		default:
 		}
 
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
 		atom, err := pcp.ReadAtom(br)
 		conn.SetReadDeadline(time.Time{})
 		if err != nil {
-			select {
-			case <-c.stopCh:
+			if c.ctx.Err() != nil {
 				return stopReasonOffAir, nil
-			default:
 			}
 			return stopReasonError, fmt.Errorf("read atom: %w", err)
 		}

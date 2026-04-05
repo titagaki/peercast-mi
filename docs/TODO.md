@@ -31,28 +31,23 @@ PeerCastStation のソースコードと比較した結果。対応ファイル:
 
 ### コンテンツバッファリング
 
-- [ ] **再接続時のバッファクリア:**
+- [x] **再接続時のバッファクリア:**
   PeerCastStation は `AddSourceStream()` で `contentHeader = null` + `contents.Clear()` してからストリームを受信し直す。さらに `streamIndex` をインクリメントして旧ストリームのデータを `ContentCollection.Add()` 内で自動排除する。
-  peercast-mi はリレークライアント再接続時にリングバッファをクリアしないため、ヘッダ変更後にストリーム位置が巻き戻ると古いデータと新しいデータが混在する可能性がある。
-  - 対応案: ヘッダ更新時 (`SetHeader`) にリングバッファをリセットする。または `streamIndex` 相当の仕組みを導入し、旧ストリームのパケットを下流に送らないようにする。
-  - 優先度: 低〜中。実害が出るかはエンコーダーの挙動次第だが、長時間リレーでは問題になりうる。
+  peercast-mi はリレークライアント再接続時にリングバッファをクリアしないため、ヘッダ変更後にストリーム位置が巻き戻ると古いデータと新しいデータが混在する可能性があった。
+  → `SetHeader` でリングバッファ (`count`, `headerPos`) をリセットするよう変更済み。新しいヘッダ受信時に旧ストリームのデータパケットが自動的に破棄される。
   - 参照: `Channel.AddSourceStream` → `contentHeader = null; contents.Clear(); streamIndex++`
   - 参照: `ContentCollection.Add()` → `content.Stream < item.Stream` なら旧ストリームとして除去
 
 ### 出力ストリームへのコンテンツ配信
 
-- [ ] **ソース切断時の出力ストリーム通知:**
+- [x] **ソース切断時の出力ストリーム通知:**
   PeerCastStation は `RemoveSourceStream` → 全 sink に `OnStopped` 送信 → sink リストクリアという明示的な通知を行う。
-  peercast-mi はリレークライアント再接続中もチャンネル・出力ストリームはそのまま残り、データが来なくなると stall timeout (PCP: 5秒, HTTP: write timeout 60秒) で自然に閉じる。
-  - 現状の利点: 再接続が素早ければ視聴者はそのまま視聴を続けられる。
-  - 現状の問題: 再接続に時間がかかると PCP 下流は 5 秒で切れる。バックオフ削除で即時再接続になったため影響は軽減されたが、全ホスト枯渇 → 停止のケースでは下流ノードへの通知が遅れる。
-  - 対応案: リレークライアント停止時にチャンネル経由で全出力に明示的に通知する仕組みを検討。ただし再接続中に視聴を維持できる現在の設計の利点を損なわないよう注意が必要。
-  - 優先度: 低。現状の動作で実用上大きな問題は出ていない。
+  peercast-mi はリレークライアント再接続中もチャンネル・出力ストリームはそのまま残り、データが来なくなると stall timeout で自然に閉じていた。
+  → `Client.Run()` 終了時 (全ホスト枯渇・tracker OffAir) に `defer ch.CloseAll()` で全出力ストリームを即座に閉じるよう変更済み。再接続ループ中 (ホスト切り替え) では呼ばないため、素早い再接続時に視聴を継続できる利点は維持。
   - 参照: `Channel.RemoveSourceStream` → `sinks` に `OnStopped` → `sinks` クリア
 
 ### その他の差異 (参考)
 
-- [ ] **`Stop()` によるブロッキング I/O の中断:**
-  PeerCastStation は `CancellationToken` で handshake 中の読み書きを中断できる。peercast-mi の `Stop()` は `stopCh` を閉じるだけで、`net.Dial` や `pcp.ReadAtom` のブロッキング I/O を直接中断するメカニズムがない。`connectTo` 内で `dialTimeout` (10秒) や `readTimeout` (60秒) が経過するまで停止が遅延する場合がある。
-  - 対応案: `context.Context` を導入し、`DialContext` や `conn.SetReadDeadline` で `stopCh` と連携させる。
-  - 優先度: 中。通常運用では問題になりにくいが、シャットダウン時のレスポンスに影響する。
+- [x] **`Stop()` によるブロッキング I/O の中断:**
+  PeerCastStation は `CancellationToken` で handshake 中の読み書きを中断できる。peercast-mi の `Stop()` は `stopCh` を閉じるだけで、`net.Dial` や `pcp.ReadAtom` のブロッキング I/O を直接中断するメカニズムがなかった。
+  → `context.Context` を導入。`DialContext` で接続中のキャンセルに対応し、接続確立後は context キャンセル時に `conn.Close()` してブロッキング読み取りを即座に中断するよう変更済み。

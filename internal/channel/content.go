@@ -92,16 +92,17 @@ func (b *ContentBuffer) notifyWrite() {
 	close(old)
 }
 
-// SetHeader updates the stream header.
+// SetHeader updates the stream header and resets the data ring buffer.
+// Clearing old packets prevents stale data from the previous stream from
+// mixing with the new one. This matches PeerCastStation's AddSourceStream
+// behaviour (contentHeader = null, contents.Clear(), streamIndex++).
 func (b *ContentBuffer) SetHeader(data []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	cp := make([]byte, len(data))
 	copy(cp, data)
-	if len(b.packets) > 0 && b.count > 0 {
-		size := len(b.packets)
-		b.headerPos = b.packets[(b.count-1)%size].Pos + uint32(len(b.packets[(b.count-1)%size].Data))
-	}
+	b.count = 0
+	b.headerPos = 0
 	b.header = cp
 }
 

@@ -295,7 +295,7 @@ func TestReceiveLoop_Stop(t *testing.T) {
 
 	// Let the loop start, then stop.
 	time.Sleep(20 * time.Millisecond)
-	c.stopOnce.Do(func() { close(c.stopCh) })
+	c.cancel()
 	clientConn.Close()
 
 	select {
