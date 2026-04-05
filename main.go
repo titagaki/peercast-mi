@@ -109,6 +109,13 @@ func main() {
 		ch.SetUpstreamAddr(upstreamAddr)
 		client := relay.New(upstreamAddr, channelID, sessionID, uint16(cfg.PeercastPort), ch)
 		client.SetGlobalIP(globalIP.Load())
+		// When the relay gives up (all hosts exhausted / tracker off-air),
+		// remove the channel from the manager so a subsequent viewer request
+		// can trigger a fresh OnDemandRelay instead of attaching to a dead
+		// channel whose relay goroutine has already exited.
+		client.SetOnStopped(func() {
+			mgr.Stop(channelID)
+		})
 		mgr.AddRelayChannel(ch, client)
 		go client.Run()
 		slog.Info("pls: auto-relay started", "addr", upstreamAddr, "channel", hex.EncodeToString(channelID[:]))

@@ -61,6 +61,18 @@ type Client struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	doneCh chan struct{}
+
+	// onStopped is invoked after Run has fully exited (doneCh is closed).
+	// Set via SetOnStopped. Used by the owner (e.g. the channel Manager) to
+	// remove the channel when the relay gives up, so that a subsequent viewer
+	// request can start a fresh relay instead of attaching to a dead channel.
+	onStopped func()
+}
+
+// SetOnStopped registers a callback invoked once Run has fully exited. Safe to
+// call only before Run is started.
+func (c *Client) SetOnStopped(fn func()) {
+	c.onStopped = fn
 }
 
 // SetGlobalIP updates the global IP address reported in BCST HOST atoms.
@@ -99,6 +111,14 @@ func New(trackerAddr string, channelID, sessionID pcp.GnuID, listenPort uint16, 
 //   - OffAir / Error from a non-tracker host causes an ignore + immediate
 //     retry on the next host. OffAir / Error from the tracker stops the client.
 func (c *Client) Run() {
+	// Defers run LIFO. onStopped must run LAST (after doneCh is closed) so
+	// that a callback calling back into Manager.Stop (which invokes
+	// Client.Stop → <-doneCh) does not deadlock.
+	defer func() {
+		if c.onStopped != nil {
+			c.onStopped()
+		}
+	}()
 	defer close(c.doneCh)
 	// When Run exits permanently (all hosts exhausted or tracker off-air),
 	// close all output streams so downstream nodes are notified immediately
