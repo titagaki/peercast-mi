@@ -259,6 +259,13 @@ func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, stop
 		return 0, nil, stopReasonError, fmt.Errorf("expected oleh, got %s", oleh.Tag)
 	}
 
+	// Record upstream node info for downstream HOST atom on shutdown.
+	olehPkt, _ := pcp.ParseHeloPacket(oleh)
+	if tcp, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		upIP, _ := pcp.IPv4ToUint32(tcp.IP)
+		c.ch.SetUpstreamNodeInfo(olehPkt.SessionID, upIP, uint16(tcp.Port))
+	}
+
 	slog.Info("relay: connected", "addr", addr, "channel", chanIDHex)
 	return statusCode, br, stopReasonError, nil
 }

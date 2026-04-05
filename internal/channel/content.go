@@ -1,6 +1,9 @@
 package channel
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 const DefaultContentBufferSize = 64
 
@@ -31,7 +34,8 @@ func ContentBufferSizeForBitrate(bitrateKbps uint32, seconds float64) int {
 type Content struct {
 	Pos       uint32
 	Data      []byte
-	ContFlags byte // PeerCastStation 互換ビットフラグ (0x00=None, 0x01=Fragment, 0x02=InterFrame, 0x04=AudioFrame)
+	ContFlags byte      // PeerCastStation 互換ビットフラグ (0x00=None, 0x01=Fragment, 0x02=InterFrame, 0x04=AudioFrame)
+	Timestamp time.Time // バッファに書き込まれた時刻（Overflow 検出用）
 }
 
 // ContentBuffer holds the stream header and a configurable-size ring buffer of data packets.
@@ -114,7 +118,7 @@ func (b *ContentBuffer) Write(data []byte, pos uint32, contFlags byte) {
 	}
 	cp := make([]byte, len(data))
 	copy(cp, data)
-	b.packets[b.count%len(b.packets)] = Content{Pos: pos, Data: cp, ContFlags: contFlags}
+	b.packets[b.count%len(b.packets)] = Content{Pos: pos, Data: cp, ContFlags: contFlags, Timestamp: time.Now()}
 	b.count++
 	b.mu.Unlock()
 	b.notifyWrite()

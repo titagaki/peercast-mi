@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	outputQueueTimeout = 5 * time.Second
-	pcpWriteTimeout    = 10 * time.Second
+	outputQueueTimeout  = 5 * time.Second
+	pcpWriteTimeout     = 10 * time.Second
+	pcpHandshakeTimeout = 18 * time.Second // PeerCastStation 互換
+	maxContentBodyLen   = 15 * 1024        // PeerCastStation 互換: 15KB 超のパケットを分割
 )
 
 // PCPOutputStream sends PCP stream data to a downstream relay node.
@@ -32,6 +34,7 @@ type PCPOutputStream struct {
 	bcstCh     chan *pcp.Atom
 	globalIP   uint32
 	listenPort uint16
+	remotePort uint16 // 下流ピアのポート（0 = firewalled）
 }
 
 func newPCPOutputStream(conn *countingConn, br *bufio.Reader, sessionID pcp.GnuID, ch *channel.Channel, id int, globalIP uint32, listenPort uint16) *PCPOutputStream {
@@ -52,6 +55,9 @@ func (o *PCPOutputStream) Type() channel.OutputStreamType { return channel.Outpu
 // PeerID implements channel.OutputStream.
 func (o *PCPOutputStream) PeerID() pcp.GnuID { return o.peerID }
 
+// IsFirewalled reports whether the downstream peer has no open port.
+func (o *PCPOutputStream) IsFirewalled() bool { return o.remotePort == 0 }
+
 // SendBcst enqueues a bcst atom for forwarding to this downstream peer.
 func (o *PCPOutputStream) SendBcst(atom *pcp.Atom) {
 	select {
@@ -60,16 +66,11 @@ func (o *PCPOutputStream) SendBcst(atom *pcp.Atom) {
 	}
 }
 
-func (o *PCPOutputStream) run() {
+// runStreaming sends initial data and enters the stream loop.
+// It is called after a successful handshake and admission.
+func (o *PCPOutputStream) runStreaming(startPos uint32) {
 	defer slog.Info("pcp: relay disconnected", "remote", o.remoteAddr, "id", o.id)
 	defer o.conn.Close()
-
-	startPos, err := o.handshake()
-	if err != nil {
-		slog.Error("pcp: handshake error", "remote", o.remoteAddr, "id", o.id, "err", err)
-		return
-	}
-	slog.Debug("pcp: handshake complete", "remote", o.remoteAddr, "id", o.id, "start_pos", startPos)
 
 	if err := o.sendInitial(); err != nil {
 		slog.Error("pcp: send initial error", "remote", o.remoteAddr, "id", o.id, "err", err)
@@ -81,11 +82,17 @@ func (o *PCPOutputStream) run() {
 }
 
 // handshake processes the HTTP GET and helo/oleh exchange.
+// admitted indicates whether the relay was accepted; if false, an HTTP 503 is
+// sent instead of 200 and PCP_OK is not sent.
 // It returns the requested start position from the x-peercast-pos header (0 if absent).
 //
 // PCP over HTTP の場合、クライアントは HTTP 200 受信後に pcp\n マジックを送らず
 // 直接 helo アトムを送る（peercast-yt channel.cpp "don't need PCP_CONNECT here"）。
-func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
+func (o *PCPOutputStream) handshake(admitted bool) (startPos uint32, err error) {
+	// Apply handshake timeout (PeerCastStation 互換: 18秒).
+	o.conn.SetDeadline(time.Now().Add(pcpHandshakeTimeout))
+	defer o.conn.SetDeadline(time.Time{})
+
 	// Read HTTP request.
 	req, err := http.ReadRequest(o.br)
 	if err != nil {
@@ -100,8 +107,13 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 		}
 	}
 
-	// Send HTTP 200 OK before PCP handshake (PeerCastStation 互換).
-	resp := "HTTP/1.0 200 OK\r\nContent-Type: application/x-peercast-pcp\r\n\r\n"
+	// Send HTTP response: 200 if admitted, 503 if relay full (PeerCastStation 互換).
+	var resp string
+	if admitted {
+		resp = "HTTP/1.0 200 OK\r\nContent-Type: application/x-peercast-pcp\r\n\r\n"
+	} else {
+		resp = "HTTP/1.0 503 Unavailable\r\nContent-Type: application/x-peercast-pcp\r\n\r\n"
+	}
 	if _, err := io.WriteString(o.conn, resp); err != nil {
 		return 0, fmt.Errorf("write HTTP response: %w", err)
 	}
@@ -146,12 +158,16 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 	var remotePort uint16
 	if helo.Ping != 0 {
 		remoteAddr := o.conn.RemoteAddr().(*net.TCPAddr)
-		if pingHost(remoteAddr.IP, helo.Ping, peerID, o.sessionID) {
+		// Site-local addresses are not reachable from the outside, so even
+		// if the ping succeeds we treat the port as closed (PeerCastStation 互換).
+		if !isSiteLocal(remoteAddr.IP) && pingHost(remoteAddr.IP, helo.Ping, peerID, o.sessionID) {
 			remotePort = helo.Ping
 		}
 	} else if helo.Port != 0 {
 		remotePort = helo.Port
 	}
+
+	o.remotePort = remotePort
 
 	// Send oleh.
 	oleh := (&pcp.HeloPacket{
@@ -165,7 +181,22 @@ func (o *PCPOutputStream) handshake() (startPos uint32, err error) {
 		return 0, fmt.Errorf("write oleh: %w", err)
 	}
 
+	// Send PCP_OK only when the relay is accepted (PeerCastStation 互換).
+	if admitted {
+		if err := pcp.NewIntAtom(pcp.PCPOK, 1).Write(o.conn); err != nil {
+			return 0, fmt.Errorf("write ok: %w", err)
+		}
+	}
+
 	return startPos, nil
+}
+
+// sendRelayDenied sends the host atom with alternative nodes and a QUIT with
+// PCPErrorUnavailable, used when the relay limit has been reached.
+func (o *PCPOutputStream) sendRelayDenied() {
+	hostAtom := o.buildHostAtom()
+	hostAtom.Write(o.conn)
+	o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorUnavailable)
 }
 
 // sendInitial sends chan (info, trck, head pkt) and host atoms.
@@ -252,7 +283,7 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 		select {
 		case <-o.closeCh:
 			slog.Debug("pcp: closed by readLoop", "remote", o.remoteAddr, "id", o.id)
-			o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorShutdown)
+			o.sendUpstreamHostAndQuit(pcp.PCPErrorQuit + pcp.PCPErrorShutdown)
 			return
 		case <-sigCh:
 			// New data written to buffer.
@@ -287,6 +318,14 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 // It skips non-keyframe packets until the first keyframe is found.
 // Returns the updated stream position, keyframe state, and any write error.
 func (o *PCPOutputStream) sendDataPackets(packets []channel.Content, pos uint32, waitingForKeyframe bool) (uint32, bool, error) {
+	// Overflow detection: if the oldest unsent packet was written > 5s ago,
+	// the downstream is too slow (PeerCastStation 互換).
+	if !packets[0].Timestamp.IsZero() && time.Since(packets[0].Timestamp) > outputQueueTimeout {
+		slog.Info("pcp: send overflow, closing", "remote", o.remoteAddr, "id", o.id,
+			"delay", time.Since(packets[0].Timestamp))
+		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorSkip)
+		return pos, waitingForKeyframe, fmt.Errorf("overflow")
+	}
 	if len(packets) > 10 {
 		slog.Debug("pcp: sending burst", "remote", o.remoteAddr, "id", o.id, "packets", len(packets), "pos", pos)
 	}
@@ -297,21 +336,36 @@ func (o *PCPOutputStream) sendDataPackets(packets []channel.Content, pos uint32,
 		}
 		waitingForKeyframe = false
 
-		atom := (&pcp.ChanPacket{
-			ID: o.ch.ID,
-			Pkt: &pcp.ChanPktData{
-				Type:         pcp.NewID4("data"),
-				Pos:          pkt.Pos,
-				Data:         pkt.Data,
-				Continuation: pkt.ContFlags,
-			},
-		}).BuildAtom()
-		o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
-		if err := atom.Write(o.conn); err != nil {
-			slog.Debug("pcp: write error, closing", "remote", o.remoteAddr, "id", o.id, "pos", pkt.Pos, "err", err)
-			return pos, waitingForKeyframe, err
+		// Split large packets into maxContentBodyLen chunks.
+		// The first chunk keeps the original ContFlags; subsequent chunks
+		// get the Fragment flag (PeerCastStation 互換).
+		data := pkt.Data
+		chunkPos := pkt.Pos
+		contFlags := pkt.ContFlags
+		for len(data) > 0 {
+			chunk := data
+			if len(chunk) > maxContentBodyLen {
+				chunk = data[:maxContentBodyLen]
+			}
+			atom := (&pcp.ChanPacket{
+				ID: o.ch.ID,
+				Pkt: &pcp.ChanPktData{
+					Type:         pcp.NewID4("data"),
+					Pos:          chunkPos,
+					Data:         chunk,
+					Continuation: contFlags,
+				},
+			}).BuildAtom()
+			o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
+			if err := atom.Write(o.conn); err != nil {
+				slog.Debug("pcp: write error, closing", "remote", o.remoteAddr, "id", o.id, "pos", chunkPos, "err", err)
+				return pos, waitingForKeyframe, err
+			}
+			o.conn.SetWriteDeadline(time.Time{})
+			data = data[len(chunk):]
+			chunkPos += uint32(len(chunk))
+			contFlags = 0x01 // Fragment flag for subsequent chunks
 		}
-		o.conn.SetWriteDeadline(time.Time{})
 		pos = pkt.Pos + uint32(len(pkt.Data))
 	}
 	return pos, waitingForKeyframe, nil
@@ -344,9 +398,14 @@ func (o *PCPOutputStream) drainNotifications() error {
 	}
 }
 
+// sendInfoUpdate sends the current ChannelInfo to the downstream peer. For
+// broadcasting channels it wraps the chan atom in a bcst container so that
+// downstream nodes can forward the info update throughout the relay tree
+// (PeerCastStation 互換: SendRelayBody → BcstChannelInfo).
 func (o *PCPOutputStream) sendInfoUpdate() error {
 	ci := o.ch.Info().ToPCP()
-	atom := (&pcp.ChanPacket{ID: o.ch.ID, Info: &ci}).BuildAtom()
+	chanAtom := (&pcp.ChanPacket{ID: o.ch.ID, Info: &ci}).BuildAtom()
+	atom := o.wrapBcstIfBroadcasting(chanAtom)
 	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 	err := atom.Write(o.conn)
 	o.conn.SetWriteDeadline(time.Time{})
@@ -355,11 +414,33 @@ func (o *PCPOutputStream) sendInfoUpdate() error {
 
 func (o *PCPOutputStream) sendTrackUpdate() error {
 	ct := o.ch.Track().ToPCP()
-	atom := (&pcp.ChanPacket{ID: o.ch.ID, Track: &ct}).BuildAtom()
+	chanAtom := (&pcp.ChanPacket{ID: o.ch.ID, Track: &ct}).BuildAtom()
+	atom := o.wrapBcstIfBroadcasting(chanAtom)
 	o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 	err := atom.Write(o.conn)
 	o.conn.SetWriteDeadline(time.Time{})
 	return err
+}
+
+// wrapBcstIfBroadcasting wraps a chan atom in a bcst container when the
+// channel is locally broadcasting. Otherwise the atom is returned as-is.
+func (o *PCPOutputStream) wrapBcstIfBroadcasting(chanAtom *pcp.Atom) *pcp.Atom {
+	if !o.ch.IsBroadcasting() {
+		return chanAtom
+	}
+	children := []*pcp.Atom{
+		pcp.NewByteAtom(pcp.PCPBcstTTL, 11),
+		pcp.NewByteAtom(pcp.PCPBcstHops, 0),
+		pcp.NewIDAtom(pcp.PCPBcstFrom, o.sessionID),
+		pcp.NewByteAtom(pcp.PCPBcstGroup, pcp.PCPBcstGroupRelays),
+		pcp.NewIDAtom(pcp.PCPBcstChanID, o.ch.ID),
+		pcp.NewIntAtom(pcp.PCPBcstVersion, version.PCPVersion),
+		pcp.NewIntAtom(pcp.PCPBcstVersionVP, version.PCPVersionVP),
+		pcp.NewBytesAtom(pcp.PCPBcstVersionExPrefix, []byte(version.ExPrefix)),
+		pcp.NewShortAtom(pcp.PCPBcstVersionExNumber, version.ExNumber()),
+		chanAtom,
+	}
+	return pcp.NewParentAtom(pcp.PCPBcst, children...)
 }
 
 func (o *PCPOutputStream) sendHeaderUpdate() error {
@@ -469,6 +550,24 @@ func (o *PCPOutputStream) sendQuit(code uint32) {
 	q.Write(o.conn)
 }
 
+// sendUpstreamHostAndQuit sends the upstream node info as a HOST atom (so the
+// downstream can reconnect directly to the upstream) followed by QUIT.
+// PeerCastStation 互換: BeforeQuitAsync で上流ノード情報を返す。
+func (o *PCPOutputStream) sendUpstreamHostAndQuit(code uint32) {
+	upSID, upIP, upPort := o.ch.UpstreamNodeInfo()
+	var zeroID pcp.GnuID
+	if upSID != zeroID && upIP != 0 {
+		host := pcputil.BuildHostAtom(pcputil.HostAtomParams{
+			SessionID:  upSID,
+			GlobalIP:   upIP,
+			ListenPort: upPort,
+			ChannelID:  o.ch.ID,
+		})
+		host.Write(o.conn)
+	}
+	o.sendQuit(code)
+}
+
 // ---------------------------------------------------------------------------
 // Atom builders
 // ---------------------------------------------------------------------------
@@ -502,6 +601,28 @@ func notify(ch chan struct{}) {
 	case ch <- struct{}{}:
 	default:
 	}
+}
+
+// isSiteLocal reports whether the IPv4 address is in a private (site-local)
+// range: 10/8, 172.16/12, 192.168/16, or 169.254/16 (link-local).
+func isSiteLocal(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	if ip4[0] == 10 {
+		return true
+	}
+	if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 {
+		return true
+	}
+	if ip4[0] == 192 && ip4[1] == 168 {
+		return true
+	}
+	if ip4[0] == 169 && ip4[1] == 254 {
+		return true
+	}
+	return false
 }
 
 func ipToUint32(addr net.Addr) uint32 {

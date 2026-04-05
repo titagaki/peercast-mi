@@ -159,17 +159,44 @@ func (l *Listener) handlePCPRelay(cc *countingConn, br *bufio.Reader, peek []byt
 	ch, ok := l.mgr.GetByID(channelID)
 	if !ok {
 		slog.Info("pcp: channel not found", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
+		io.WriteString(cc, "HTTP/1.0 404 Not Found\r\n\r\n")
+		cc.Close()
+		return
+	}
+	// PeerCastStation 互換: チャンネルがデータ受信中でなければ 404 を返す。
+	if !ch.HasData() {
+		slog.Info("pcp: channel not receiving", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
+		io.WriteString(cc, "HTTP/1.0 404 Not Found\r\n\r\n")
 		cc.Close()
 		return
 	}
 	id := int(l.nextConnID.Add(1))
 	h := newPCPOutputStream(cc, br, l.sessionID, ch, id, l.globalIP.Load(), uint16(l.port))
+
+	// Check admission before handshake to determine HTTP status code (200 vs 503).
+	admitted := l.canAdmitRelay(ch)
+	startPos, err := h.handshake(admitted)
+	if err != nil {
+		slog.Error("pcp: handshake error", "remote", cc.RemoteAddr(), "id", id, "err", err)
+		cc.Close()
+		return
+	}
+	if !admitted {
+		slog.Info("pcp: rejected (relay full)", "remote", cc.RemoteAddr(), "id", id)
+		h.sendRelayDenied()
+		cc.Close()
+		return
+	}
+
+	// Atomically add to channel (may fail if slot was taken during handshake).
 	if !l.tryAdmit(ch, h) {
+		slog.Info("pcp: rejected (relay full)", "remote", cc.RemoteAddr(), "id", id)
+		h.sendRelayDenied()
 		cc.Close()
 		return
 	}
 	slog.Info("pcp: relay connected", "remote", cc.RemoteAddr(), "id", id)
-	h.run()
+	h.runStreaming(startPos)
 	ch.RemoveOutput(h)
 }
 
@@ -252,6 +279,25 @@ func (l *Listener) handleHTTPStream(cc *countingConn, br *bufio.Reader, peek []b
 	slog.Info("http: viewer connected", "remote", cc.RemoteAddr(), "id", id)
 	h.run()
 	ch.RemoveOutput(h)
+}
+
+// canAdmitRelay checks whether a new PCP relay can be accepted, attempting
+// to evict a firewalled downstream node if per-channel relay slots are full.
+// Used to determine the HTTP status code (200 vs 503) before the PCP handshake.
+func (l *Listener) canAdmitRelay(ch *channel.Channel) bool {
+	l.admitMu.Lock()
+	defer l.admitMu.Unlock()
+	if l.maxRelaysTotal > 0 && l.mgr.TotalRelays() >= l.maxRelaysTotal {
+		return false
+	}
+	if l.isUpstreamFull() {
+		return false
+	}
+	// Try to evict a firewalled relay if per-channel limit is reached.
+	if !ch.MakeRelayable(l.maxRelays) {
+		return false
+	}
+	return true
 }
 
 // tryAdmit atomically checks global limits and adds the output stream to the

@@ -48,55 +48,54 @@ PeerCastStation のソースコードと比較した結果。対応ファイル:
 
 ### PCP 出力ストリーム (PCPOutputStream)
 
-- [ ] **ハンドシェイク後に PCP_OK を送信:**
+- [x] **ハンドシェイク後に PCP_OK を送信:**
   PeerCastStation は helo/oleh 交換後、リレー受け入れ時に `PCP_OK (1)` を送信する。
-  peercast-mi は oleh 送信後すぐに `sendInitial()` に進み、`PCP_OK` を送信していない。
+  → oleh 送信後に `pcp.NewIntAtom(pcp.PCPOK, 1)` を送信するよう変更済み (リレー受け入れ時のみ)。
   - 参照: `PCPOutputStream.cs` DoHandshake → `stream.WriteAsync(new Atom(Atom.PCP_OK, (int)1))`
 
-- [ ] **リレー満杯時に 503 + HOST リスト + QUIT を返す:**
-  PeerCastStation は `MakeRelayable()` で空きを作れない場合、HTTP 503 を返し、helo/oleh 交換後に代替ホストリストを送信して `QUIT + UNAVAILABLE` で切断する。さらに BAN リスト (90秒) に追加する。
-  peercast-mi は `tryAdmit()` が false の場合、単にコネクションを閉じるだけで代替ホストの案内がない。
+- [x] **リレー満杯時に 503 + HOST リスト + QUIT を返す:**
+  PeerCastStation は `MakeRelayable()` で空きを作れない場合、HTTP 503 を返し、helo/oleh 交換後に代替ホストリストを送信して `QUIT + UNAVAILABLE` で切断する。
+  → admission 判定を handshake 前に行い、満杯時は HTTP 503 を返して helo/oleh 交換後に自ノード情報を HOST として送信し `QUIT + UNAVAILABLE` で切断するよう変更済み。BAN リストは未実装 (peercast-mi に BAN 機構がないため)。
   - 参照: `PCPOutputStream.cs` DoHandshake → `isRelayFull` 時に `SelectSourceHosts` → `SendHost` → `HandshakeErrorException(UnavailableError)`
-  - 参照: `PCPOutputStream.cs` BeforeQuitAsync → `channel.Ban(90秒)` + `SendHost`
 
-- [ ] **劣勢リレー接続の強制切断 (MakeRelayable):**
-  PeerCastStation はリレー枠が満杯でも、firewalled またはリレー能力がない (RelayFull かつ LocalRelays < 1) 下流ノードを切断して枠を空ける。
-  peercast-mi は単純な数値比較のみで、品質の低いリレーを蹴り出す機構がない。
+- [x] **劣勢リレー接続の強制切断 (MakeRelayable):**
+  PeerCastStation はリレー枠が満杯でも、firewalled またはリレー能力がない下流ノードを切断して枠を空ける。
+  → `Channel.MakeRelayable(maxRelays)` を追加。`canAdmitRelay` で呼び出し、firewalled (remotePort == 0) な PCP 出力ストリームを 1 つ退出させる。`PCPOutputStream` は `helo.Ping` と `helo.Port` の結果を `remotePort` に保持し、`IsFirewalled()` で判定。
   - 参照: `Channel.cs` MakeRelayable → `IsFirewalled || (IsRelayFull && LocalRelays < 1)` な sink を `OnStopped(UnavailableError)` で切断
 
-- [ ] **Overflow (送信遅延) 検出:**
-  PeerCastStation はキューの先頭と新メッセージのタイムスタンプ差が 5 秒を超えると Overflow として `StopReason.SendTimeoutError` → `QUIT + SKIP` を送信して切断する。
-  peercast-mi は stall timer (5秒間データが来なかった場合) でタイムアウトし、QUIT コードは SHUTDOWN。「送信が追いつかない」ケース（データは来ているが書き込みが遅い）の検出方法が異なる。
+- [x] **Overflow (送信遅延) 検出:**
+  PeerCastStation はキューの先頭と新メッセージのタイムスタンプ差が 5 秒を超えると Overflow として `QUIT + SKIP` を送信して切断する。
+  → `Content` に `Timestamp` フィールドを追加し、`sendDataPackets` でバッファ内最古のパケットの経過時間が 5 秒を超えた場合に `PCPErrorQuit + PCPErrorSkip` を送信して切断するよう変更済み。
   - 参照: `PCPOutputStream.cs` Enqueue → `(msg.Timestamp-nxtMsg.Timestamp).TotalMilliseconds > 5000` → Overflow → `SendTimeoutError`
 
-- [ ] **大きいコンテンツパケットの分割送信:**
+- [x] **大きいコンテンツパケットの分割送信:**
   PeerCastStation は 15KB を超えるコンテンツパケットを 15KB 単位に分割し、2番目以降に `Fragment` フラグを付けて送信する。
-  peercast-mi はパケットをそのまま送信しており、分割ロジックがない。
+  → `sendDataPackets` で 15KB ずつ分割して送信するよう変更済み。2番目以降のチャンクには Fragment フラグ (0x01) を付与。
   - 参照: `PCPOutputStream.cs` CreateContentBodyPacket → `MaxBodyLength = 15*1024` で分割、`PCPChanPacketContinuation.Fragment` 付与
 
-- [ ] **シャットダウン時に上流ノード情報を返す:**
+- [x] **シャットダウン時に上流ノード情報を返す:**
   PeerCastStation はシャットダウン等で下流ノードを切断する際、自分が接続していた上流ノードの情報を HOST として返す。これにより下流は直接上流に接続し直せる。
-  peercast-mi は `QUIT + SHUTDOWN` を送信するだけで上流ノード情報は返さない。
+  → `Channel` に `upstreamSessionID/upstreamIP/upstreamPort` を追加。リレークライアントが handshake 成功時に oleh から session ID と remote endpoint を記録する。`sendUpstreamHostAndQuit` で上流情報を HOST atom として送信してから QUIT する。
   - 参照: `PCPOutputStream.cs` BeforeQuitAsync → `StopReason.UserShutdown` 時に上流の `RemoteEndPoint`/`RemoteSessionID` を HOST として送信
 
-- [ ] **ハンドシェイクタイムアウト:**
+- [x] **ハンドシェイクタイムアウト:**
   PeerCastStation はハンドシェイク全体に 18 秒のタイムアウトを設けている。
-  peercast-mi はハンドシェイクに明示的なタイムアウトがなく TCP レベルのデフォルトに依存。
+  → `handshake` の冒頭で `conn.SetDeadline(time.Now().Add(18*time.Second))` を設定し、return 時に解除するよう変更済み。
   - 参照: `PCPOutputStream.cs` `PCPHandshakeTimeout = 18000` → `handshakeCT.CancelAfter`
 
-- [ ] **ChannelInfo/Track の bcst 送信 (配信チャンネルのリレー):**
-  PeerCastStation は `IsBroadcasting` かつヘッダー送信済みの場合、ChannelInfo/Track 変更時に下流に `PCP_BCST` で wrapped した `PCP_CHAN` (info+track) を送信する。
-  peercast-mi は `PCP_CHAN` (bcst 無し) で直接送信する。
+- [x] **ChannelInfo/Track の bcst 送信 (配信チャンネルのリレー):**
+  PeerCastStation は `IsBroadcasting` かつヘッダー送信済みの場合、ChannelInfo/Track 変更時に下流に `PCP_BCST` で wrapped した `PCP_CHAN` を送信する。
+  → `wrapBcstIfBroadcasting` を追加。`sendInfoUpdate`/`sendTrackUpdate` で `IsBroadcasting` 時に chan atom を bcst でラップして送信するよう変更済み。
   - 参照: `PCPOutputStream.cs` SendRelayBody → `ChannelInfo`/`ChannelTrack` 時に `BcstChannelInfo()`
 
-- [ ] **ping 時のサイトローカルアドレス判定:**
+- [x] **ping 時のサイトローカルアドレス判定:**
   PeerCastStation は ping 成功してもリモートアドレスが `IsSiteLocal()` の場合は `remote_port = 0` (ポート未開放扱い) にする。
-  peercast-mi はサイトローカル判定がなく、ping 成功すれば無条件にポートを設定する。
+  → `isSiteLocal` (10/8, 172.16/12, 192.168/16, 169.254/16) を追加し、ping 判定時にサイトローカルなら remotePort = 0 のままにするよう変更済み。
   - 参照: `PCPOutputStream.cs` OnHandshakePCPHelo → `remoteEndPoint.Address.IsSiteLocal()` なら `remote_port = 0`
 
-- [ ] **チャンネル Status チェック:**
+- [x] **チャンネル Status チェック:**
   PeerCastStation はリレーリクエスト時に `channel.Status != SourceStreamStatus.Receiving` ならば 404 を返す。
-  peercast-mi は���ャンネルが存在すればデータの有無に関わらず受け入れる。
+  → `handlePCPRelay` でチャンネル存在確認後に `ch.HasData()` を判定し、データ未受信なら HTTP 404 を返すよう変更済み。peercast-mi には明示的な SourceStreamStatus がないため、バッファにデータがあるかで判定。
   - 参照: `PCPOutputStream.cs` Invoke → `channel.Status != SourceStreamStatus.Receiving` → NotFound
 
 ### HTTP 出力ストリーム (HTTPOutputStream)

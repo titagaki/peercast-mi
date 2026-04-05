@@ -44,6 +44,13 @@ type BcstForwarder interface {
 	PeerID() pcp.GnuID
 }
 
+// RelayEvictable is implemented by PCP output streams to report whether they
+// are candidates for eviction when relay slots are full.
+type RelayEvictable interface {
+	// IsFirewalled reports whether the remote peer has no open port.
+	IsFirewalled() bool
+}
+
 // ConnectionInfo is a snapshot of an active output connection.
 type ConnectionInfo struct {
 	ID         int
@@ -68,6 +75,11 @@ type Channel struct {
 	outputs        []OutputStream
 	numListeners   int // HTTPOutputStream の数
 	numRelays      int // PCPOutputStream の数
+
+	// Upstream node info (set by relay client on connect).
+	upstreamSessionID pcp.GnuID
+	upstreamIP        uint32
+	upstreamPort      uint16
 }
 
 // New creates a new Channel. bufSize sets the ContentBuffer ring buffer size;
@@ -127,6 +139,22 @@ func (c *Channel) UpstreamAddr() string {
 func (c *Channel) SetUpstreamAddr(addr string) {
 	c.mu.Lock()
 	c.upstreamAddr = addr
+	c.mu.Unlock()
+}
+
+// UpstreamNodeInfo returns the upstream node's session ID, IP, and port.
+func (c *Channel) UpstreamNodeInfo() (sessionID pcp.GnuID, ip uint32, port uint16) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.upstreamSessionID, c.upstreamIP, c.upstreamPort
+}
+
+// SetUpstreamNodeInfo records the upstream node's session ID, IP, and port.
+func (c *Channel) SetUpstreamNodeInfo(sessionID pcp.GnuID, ip uint32, port uint16) {
+	c.mu.Lock()
+	c.upstreamSessionID = sessionID
+	c.upstreamIP = ip
+	c.upstreamPort = port
 	c.mu.Unlock()
 }
 
@@ -249,6 +277,37 @@ func (c *Channel) TryAddOutput(o OutputStream, maxRelays, maxListeners int) bool
 		c.numListeners++
 	}
 	c.outputs = append(c.outputs, o)
+	return true
+}
+
+// MakeRelayable tries to free a relay slot by evicting a firewalled downstream
+// node. Returns true if a slot was freed or was already available.
+// PeerCastStation 互換: firewalled なノードを切断して枠を空ける。
+func (c *Channel) MakeRelayable(maxRelays int) bool {
+	if maxRelays <= 0 {
+		return true
+	}
+	c.mu.RLock()
+	if c.numRelays < maxRelays {
+		c.mu.RUnlock()
+		return true
+	}
+	// Find a firewalled relay to evict.
+	var victim OutputStream
+	for _, o := range c.outputs {
+		if o.Type() != OutputStreamPCP {
+			continue
+		}
+		if ev, ok := o.(RelayEvictable); ok && ev.IsFirewalled() {
+			victim = o
+			break
+		}
+	}
+	c.mu.RUnlock()
+	if victim == nil {
+		return false
+	}
+	victim.Close()
 	return true
 }
 
