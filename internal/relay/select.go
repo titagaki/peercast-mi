@@ -6,8 +6,15 @@ import (
 
 // selectSourceHost picks the best connectable host from the source node list,
 // using PeerCastStation's scoring algorithm.
+//
+// ourGlobalIP is our own external IPv4 (learned from the YP oleh); it is used
+// to decide whether a source node is behind the same NAT as us. When it is,
+// the node's LocalAddr is preferred and a site-local scoring bonus is applied,
+// matching PeerCastStation's IsSiteLocal(Host) check
+// (PCPSourceStream.cs: compares node.GlobalEndPoint to listener.GlobalEndPoint).
+//
 // Returns "" if no host is available.
-func selectSourceHost(nodes []SourceNode, ignored *IgnoredNodeCollection, trackerAddr string) string {
+func selectSourceHost(nodes []SourceNode, ignored *IgnoredNodeCollection, trackerAddr string, ourGlobalIP uint32) string {
 	bestAddr := ""
 	bestScore := -1.0
 
@@ -16,10 +23,18 @@ func selectSourceHost(nodes []SourceNode, ignored *IgnoredNodeCollection, tracke
 			continue
 		}
 
-		// Determine preferred address.
-		addr := n.GlobalAddr
-		if n.LocalAddr != "" && isSiteLocal(n.LocalAddr) {
+		// A node is "site-local" (same NAT as us) iff its external IP
+		// matches our own learned global IP. When that holds we should
+		// reach it via its LocalAddr; otherwise we must always go via
+		// GlobalAddr, even if the node reports a LocalAddr (that private
+		// IP belongs to a different LAN and would only time out).
+		sameNAT := ourGlobalIP != 0 && n.GlobalIP != 0 && n.GlobalIP == ourGlobalIP
+
+		var addr string
+		if sameNAT && n.LocalAddr != "" {
 			addr = n.LocalAddr
+		} else {
+			addr = n.GlobalAddr
 		}
 		if addr == "" {
 			continue
@@ -36,7 +51,7 @@ func selectSourceHost(nodes []SourceNode, ignored *IgnoredNodeCollection, tracke
 		//     (relayCount * 10)
 		//   )
 		var score float64
-		if isSiteLocal(addr) {
+		if sameNAT {
 			score += 8000
 		}
 

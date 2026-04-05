@@ -113,7 +113,7 @@ func (c *Client) Run() {
 			return
 		}
 
-		targetAddr := selectSourceHost(c.sourceNodes.List(), c.ignoredNodes, c.trackerAddr)
+		targetAddr := selectSourceHost(c.sourceNodes.List(), c.ignoredNodes, c.trackerAddr, c.globalIP.Load())
 		if targetAddr == "" {
 			slog.Info("relay: no connectable host, stopping")
 			return

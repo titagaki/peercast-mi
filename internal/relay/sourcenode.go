@@ -2,7 +2,6 @@ package relay
 
 import (
 	"fmt"
-	"net"
 	"sync"
 	"time"
 
@@ -14,6 +13,7 @@ const nodeExpiry = 3 * time.Minute
 // SourceNode represents a candidate upstream host learned from PCP HOST atoms.
 type SourceNode struct {
 	SessionID    pcp.GnuID
+	GlobalIP     uint32 // raw external IPv4 (host byte order via pcp.IPv4ToUint32)
 	GlobalAddr   string // "ip:port" external address
 	LocalAddr    string // "ip:port" internal address (may be empty)
 	IsFirewalled bool
@@ -118,6 +118,7 @@ func parseSourceNode(atom *pcp.Atom) (SourceNode, bool) {
 	if ports[0] != 0 {
 		ip := pcp.IPv4FromUint32(ips[0])
 		if !ip.IsUnspecified() && !ip.IsLoopback() {
+			node.GlobalIP = ips[0]
 			node.GlobalAddr = fmt.Sprintf("%s:%d", ip, ports[0])
 		}
 	}
@@ -136,15 +137,3 @@ func parseSourceNode(atom *pcp.Atom) (SourceNode, bool) {
 	return node, true
 }
 
-// isSiteLocal returns true if addr is on the same local network.
-func isSiteLocal(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	return ip.IsPrivate()
-}
