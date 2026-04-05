@@ -92,8 +92,22 @@ export const issueStreamKey = (accountName: string, streamKey: string) =>
   rpc<null>("issueStreamKey", [accountName, streamKey]);
 export const revokeStreamKey = (accountName: string) =>
   rpc<null>("revokeStreamKey", [accountName]);
+export type ChannelConnection = {
+  connectionId: number;
+  type: string; // "source" | "relay" | "direct"
+  status: string;
+  sendRate: number;
+  recvRate: number;
+  protocolName: string;
+  remoteEndPoint: string | null;
+};
+
 export const getChannels = () => rpc<ChannelEntry[]>("getChannels");
 export const stopChannel = (channelId: string) =>
   rpc<null>("stopChannel", [channelId]);
 export const bumpChannel = (channelId: string) =>
   rpc<null>("bumpChannel", [channelId]);
+export const getChannelConnections = (channelId: string) =>
+  rpc<ChannelConnection[]>("getChannelConnections", [channelId]);
+export const stopChannelConnection = (channelId: string, connectionId: number) =>
+  rpc<boolean>("stopChannelConnection", [channelId, connectionId]);

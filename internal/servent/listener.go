@@ -240,7 +240,13 @@ func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader, _ []byte) {
 		return
 	}
 
-	streamURL := fmt.Sprintf("http://localhost:%d/stream/%s", l.port, hex.EncodeToString(channelID[:]))
+	// クライアントがアクセスに使ったホスト名/ポートをそのまま流用する。
+	// localhost 固定だと LAN 越し視聴や WSL mirrored 環境で繋がらないため。
+	host := req.Host
+	if host == "" {
+		host = fmt.Sprintf("localhost:%d", l.port)
+	}
+	streamURL := fmt.Sprintf("http://%s/stream/%s", host, hex.EncodeToString(channelID[:]))
 	name := ch.Info().Name
 	if name == "" {
 		name = hex.EncodeToString(channelID[:])

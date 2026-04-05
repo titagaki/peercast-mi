@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   bumpChannel,
+  getChannelConnections,
   getChannels,
   stopChannel,
+  stopChannelConnection,
+  type ChannelConnection,
   type ChannelEntry,
 } from "./api";
 
@@ -16,11 +19,20 @@ function formatUptime(seconds: number): string {
   return `${s}s`;
 }
 
+function formatRate(bytesPerSec: number): string {
+  if (!bytesPerSec) return "-";
+  const kbps = (bytesPerSec * 8) / 1000;
+  if (kbps >= 1000) return `${(kbps / 1000).toFixed(2)} Mbps`;
+  return `${kbps.toFixed(1)} kbps`;
+}
+
 export function ChannelsPage() {
   const [entries, setEntries] = useState<ChannelEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [connections, setConnections] = useState<ChannelConnection[]>([]);
+  const [connError, setConnError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -41,6 +53,37 @@ export function ChannelsPage() {
   }, [reload]);
 
   const selected = entries.find((e) => e.channelId === selectedId) ?? null;
+
+  const reloadConnections = useCallback(async (channelId: string) => {
+    setConnError(null);
+    try {
+      setConnections(await getChannelConnections(channelId));
+    } catch (e) {
+      setConnError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setConnections([]);
+      setConnError(null);
+      return;
+    }
+    void reloadConnections(selectedId);
+    const timer = setInterval(() => void reloadConnections(selectedId), 30000);
+    return () => clearInterval(timer);
+  }, [selectedId, reloadConnections]);
+
+  const onStopConnection = async (connectionId: number) => {
+    if (!selectedId) return;
+    if (!confirm("Disconnect this connection?")) return;
+    try {
+      await stopChannelConnection(selectedId, connectionId);
+      await reloadConnections(selectedId);
+    } catch (e) {
+      setConnError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const onStop = async (channelId: string) => {
     if (!confirm("Stop this channel?")) return;
@@ -150,6 +193,48 @@ export function ChannelsPage() {
               {selected.status.isDirectFull ? "direct-full " : ""}
             </dd>
           </dl>
+
+          <h4>Connections</h4>
+          {connError && <div className="error">{connError}</div>}
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Type</th>
+                <th>Protocol</th>
+                <th>Status</th>
+                <th>Remote</th>
+                <th>Send</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {connections.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="empty">
+                    No connections.
+                  </td>
+                </tr>
+              )}
+              {connections.map((c) => (
+                <tr key={`${c.type}-${c.connectionId}`}>
+                  <td>{c.connectionId < 0 ? "-" : c.connectionId}</td>
+                  <td>{c.type}</td>
+                  <td>{c.protocolName}</td>
+                  <td>{c.status}</td>
+                  <td className="mono">{c.remoteEndPoint ?? "-"}</td>
+                  <td>{formatRate(c.sendRate)}</td>
+                  <td>
+                    {c.type === "relay" && (
+                      <button onClick={() => onStopConnection(c.connectionId)}>
+                        Disconnect
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
