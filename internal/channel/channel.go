@@ -230,6 +230,12 @@ func (c *Channel) Since(pos uint32) []Content {
 	return c.buffer.Since(pos)
 }
 
+// PacketsAfter returns all buffered packets strictly newer than ref, ordered
+// by (Timestamp, Pos). Used by HTTPOutputStream.
+func (c *Channel) PacketsAfter(ref Content) []Content {
+	return c.buffer.PacketsAfter(ref)
+}
+
 // ContentPosition returns the byte position just past the newest content.
 func (c *Channel) ContentPosition() uint32 {
 	return c.buffer.ContentPosition()

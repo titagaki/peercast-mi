@@ -198,6 +198,50 @@ func (b *ContentBuffer) Since(pos uint32) []Content {
 	return result
 }
 
+// PacketsAfter returns all buffered packets strictly newer than ref, using
+// Timestamp as the primary order key and Pos as the tiebreaker. If
+// ref.Timestamp is zero, all buffered packets are returned.
+//
+// This is used by HTTPOutputStream to guarantee monotonic delivery even when
+// the stream position is reset (e.g. after SetHeader rewinds the ring buffer
+// on a header change). PeerCastStation 互換:
+// c.Timestamp > sent.Timestamp || (同一 Timestamp && Position > sent.Position).
+func (b *ContentBuffer) PacketsAfter(ref Content) []Content {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if b.count == 0 {
+		return nil
+	}
+
+	start := 0
+	end := b.count
+	size := len(b.packets)
+	if b.count > size {
+		start = b.count - size
+	}
+
+	firstIdx := -1
+	for i := start; i < end; i++ {
+		p := b.packets[i%size]
+		if ref.Timestamp.IsZero() ||
+			p.Timestamp.After(ref.Timestamp) ||
+			(p.Timestamp.Equal(ref.Timestamp) && p.Pos > ref.Pos) {
+			firstIdx = i
+			break
+		}
+	}
+	if firstIdx < 0 {
+		return nil
+	}
+
+	result := make([]Content, 0, end-firstIdx)
+	for i := firstIdx; i < end; i++ {
+		result = append(result, b.packets[i%size])
+	}
+	return result
+}
+
 // ContentPosition returns the byte position just past the newest content,
 // matching PeerCastStation's Channel.ContentPosition property.
 // Returns 0 if no header has been set.

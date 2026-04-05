@@ -100,14 +100,14 @@ PeerCastStation のソースコードと比較した結果。対応ファイル:
 
 ### HTTP 出力ストリーム (HTTPOutputStream)
 
-- [ ] **ヘッダー変更時の挙動:**
+- [x] **ヘッダー変更時の挙動:**
   PeerCastStation は HTTP ストリームでヘッダーが変更されると新しいヘッダーを送信してストリームを継続する。
-  peercast-mi はヘッダー変更時に「HTTP/FLV では途中でヘッダーを差し替えられない」として切断する。
+  → `HTTPOutputStream.run` で `headerCh` 受信時に新ヘッダーを書き込み、`sent` と `waitingForKeyframe` をリセットしてそのまま配信継続するよう変更済み。データパケット送信の直前にも非ブロッキングで `headerCh` を確認し、`SetHeader`+`Write` の競合で新ボディが旧ヘッダーのまま送出される事を防ぐ。
   - 参照: `HTTPOutputStream.cs` StreamHandler → `ContentHeader` 時に `WriteAsync(packet.Content.Data)` で新ヘッダーを送信して継続
 
-- [ ] **Content の Timestamp ベース順序保証:**
+- [x] **Content の Timestamp ベース順序保証:**
   PeerCastStation は HTTP ストリームで `content.Timestamp > sent.body.Timestamp` で順序を保証し、古いコンテンツの再送を防ぐ。
-  peercast-mi は位置 (pos) ベースの線形走査のみで Timestamp による重複排除はない。
+  → `ContentBuffer.PacketsAfter(ref Content)` を追加し、`(Timestamp, Pos)` の辞書順で厳密に新しいパケットのみを返すよう変更。HTTPOutputStream は `pos` ではなく直前に送った `Content` を保持して次回の基準に使う。ヘッダー変更でバッファの位置空間が巻き戻っても、古いパケットを取りこぼさずかつ二重送信もしない。
   - 参照: `HTTPOutputStream.cs` StreamHandler → `c.Timestamp > sent.Value.body.Timestamp || (同一 Timestamp && Position > sent.body.Position)`
 
 ### その他の差異 (参考)

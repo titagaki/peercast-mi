@@ -98,24 +98,56 @@ func (o *HTTPOutputStream) run() {
 		}
 	}
 
-	// Stream data starting from the next keyframe.
-	var pos uint32
+	// Stream data starting from the next keyframe. `sent` tracks the most
+	// recently written packet by (Timestamp, Pos); this is used instead of a
+	// raw position counter so that a header change (which rewinds the ring
+	// buffer's position space) cannot cause stale-position filtering to drop
+	// packets that are actually newer (PeerCastStation 互換).
+	var sent channel.Content
 	waitingForKeyframe := true
 
+	// writeHeaderUpdate flushes the current stream header to the player and
+	// resets the keyframe gating so the next-sent data starts a fresh GOP.
+	// PeerCastStation 互換: ContentHeader 受信時に新ヘッダーを書き込んで継続。
+	writeHeaderUpdate := func() error {
+		h, _ := o.ch.Header()
+		if len(h) == 0 {
+			return nil
+		}
+		o.conn.SetWriteDeadline(time.Now().Add(directWriteTimeout))
+		if _, err := o.conn.Write(h); err != nil {
+			return err
+		}
+		sent = channel.Content{}
+		waitingForKeyframe = true
+		slog.Debug("http: header updated mid-stream", "remote", o.remoteAddr, "id", o.id)
+		return nil
+	}
+
 	for {
+		// Always service a pending header change before sending more data so
+		// that a concurrent SetHeader+Write sequence cannot leak new body
+		// bytes ahead of the new header.
+		select {
+		case <-o.headerCh:
+			if err := writeHeaderUpdate(); err != nil {
+				return
+			}
+		default:
+		}
+
 		sigCh := o.ch.Signal()
-		packets := o.ch.Since(pos)
+		packets := o.ch.PacketsAfter(sent)
 
 		if len(packets) == 0 {
 			select {
 			case <-o.closeCh:
 				return
 			case <-o.headerCh:
-				// Stream header changed (e.g. relay reconnected with new
-				// codec config). HTTP/FLV cannot splice a new header
-				// mid-stream, so disconnect and let the player reconnect.
-				slog.Debug("http: header changed, closing", "remote", o.remoteAddr, "id", o.id)
-				return
+				if err := writeHeaderUpdate(); err != nil {
+					return
+				}
+				continue
 			case <-sigCh:
 				continue
 			}
@@ -123,7 +155,7 @@ func (o *HTTPOutputStream) run() {
 
 		for _, pkt := range packets {
 			if waitingForKeyframe && pkt.ContFlags != 0 {
-				pos = pkt.Pos + uint32(len(pkt.Data))
+				sent = pkt
 				continue
 			}
 			waitingForKeyframe = false
@@ -132,7 +164,7 @@ func (o *HTTPOutputStream) run() {
 			if _, err := o.conn.Write(pkt.Data); err != nil {
 				return
 			}
-			pos = pkt.Pos + uint32(len(pkt.Data))
+			sent = pkt
 		}
 	}
 }
