@@ -36,7 +36,7 @@ export function ChannelsPage() {
 
   useEffect(() => {
     void reload();
-    const timer = setInterval(() => void reload(), 5000);
+    const timer = setInterval(() => void reload(), 30000);
     return () => clearInterval(timer);
   }, [reload]);
 
