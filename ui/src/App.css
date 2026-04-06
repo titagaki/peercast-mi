@@ -8,7 +8,7 @@ body {
 }
 
 .app {
-  max-width: 1200px;
+  width: min(960px, 100% - 2rem);
   margin: 0 auto;
   padding: 1rem;
 }
@@ -113,6 +113,15 @@ body {
 
 .data-table tbody tr.selected {
   background: #6aa3;
+}
+
+.data-table.kv-table {
+  table-layout: fixed;
+}
+
+.data-table.kv-table th:first-child,
+.data-table.kv-table td:first-child {
+  width: 10rem;
 }
 
 .data-table .empty {

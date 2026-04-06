@@ -58,7 +58,6 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (
 | `revokeStreamKey` | `[accountName]` | `null` |
 | `listStreamKeys` | なし | `[{ accountName, streamKey }, ...]` |
 | `broadcastChannel` | `[{ streamKey, info, track }]` | `{ channelId }` |
-| `relayChannel` | `[{ upstreamAddr, channelId }]` | `{ channelId }` |
 | `getVersionInfo` | なし | `{ agentName }` |
 | `getSettings` | なし | `{ serverPort, rtmpPort }` |
 | `getChannels` | なし | チャンネルオブジェクトの配列 |
@@ -491,5 +490,4 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
 - `getChannelStatus.status` は `"Receiving"` (データ受信中) または `"Idle"` (未受信)。
 - `getChannelConnections` の `recvRate` は常に `0`（受信レートの計測は未実装）。
 - `getChannelRelayTree` の `address` は空文字列（グローバル IP 未取得）。
-- `relayChannel` は返却直後に上流への接続が完了していない場合がある。`getChannelStatus.isReceiving` で確認する。
 - リレーチャンネルでも `bumpChannel` は機能する（YP への bcst が送信される）。

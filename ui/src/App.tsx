@@ -2,8 +2,9 @@ import { useState } from "react";
 import "./App.css";
 import { ChannelsPage } from "./ChannelsPage";
 import { StreamKeysPage } from "./StreamKeysPage";
+import { StatusPage } from "./StatusPage";
 
-type Tab = "channels" | "streamKeys";
+type Tab = "channels" | "streamKeys" | "status";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("channels");
@@ -24,9 +25,17 @@ export default function App() {
         >
           Stream Keys
         </button>
+        <button
+          className={tab === "status" ? "active" : ""}
+          onClick={() => setTab("status")}
+        >
+          Status
+        </button>
       </nav>
       <main className="app-main">
-        {tab === "channels" ? <ChannelsPage /> : <StreamKeysPage />}
+        {tab === "channels" && <ChannelsPage />}
+        {tab === "streamKeys" && <StreamKeysPage />}
+        {tab === "status" && <StatusPage />}
       </main>
     </div>
   );

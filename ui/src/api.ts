@@ -140,6 +140,26 @@ export type RelayTreeNode = {
   children: RelayTreeNode[];
 };
 
+export type VersionInfo = {
+  agentName: string;
+};
+
+export type Settings = {
+  serverPort: number;
+  rtmpPort: number;
+};
+
+export type YellowPage = {
+  yellowPageId: number;
+  name: string;
+  uri: string;
+  announceUri: string;
+  channelCount: number;
+};
+
+export const getVersionInfo = () => rpc<VersionInfo>("getVersionInfo");
+export const getSettings = () => rpc<Settings>("getSettings");
+export const getYellowPages = () => rpc<YellowPage[]>("getYellowPages");
 export const getChannels = () => rpc<ChannelEntry[]>("getChannels");
 export const getChannelRelayTree = (channelId: string) =>
   rpc<RelayTreeNode[]>("getChannelRelayTree", [channelId]);
