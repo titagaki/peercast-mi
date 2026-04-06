@@ -34,9 +34,11 @@ type PCPOutputStream struct {
 	bcstCh       chan *pcp.Atom
 	globalIP     uint32
 	listenPort   uint16
-	remotePort   uint16 // 下流ピアのポート（0 = firewalled）
-	maxRelays    int    // per-channel 制限 (0 = unlimited)
-	maxListeners int    // per-channel 制限 (0 = unlimited)
+	remotePort    uint16 // 下流ピアのポート（0 = firewalled）
+	peerAgent     string // 下流ピアの agent 文字列
+	peerVersion   uint32 // 下流ピアの PCP version
+	maxRelays     int    // per-channel 制限 (0 = unlimited)
+	maxListeners  int    // per-channel 制限 (0 = unlimited)
 }
 
 func newPCPOutputStream(conn *countingConn, br *bufio.Reader, sessionID pcp.GnuID, ch *channel.Channel, id int, globalIP uint32, listenPort uint16, maxRelays, maxListeners int) *PCPOutputStream {
@@ -61,6 +63,15 @@ func (o *PCPOutputStream) PeerID() pcp.GnuID { return o.peerID }
 
 // IsFirewalled reports whether the downstream peer has no open port.
 func (o *PCPOutputStream) IsFirewalled() bool { return o.remotePort == 0 }
+
+// RemotePort returns the downstream peer's listen port (0 if firewalled).
+func (o *PCPOutputStream) RemotePort() uint16 { return o.remotePort }
+
+// PeerAgent returns the downstream peer's agent string from helo.
+func (o *PCPOutputStream) PeerAgent() string { return o.peerAgent }
+
+// PeerVersion returns the downstream peer's PCP version from helo.
+func (o *PCPOutputStream) PeerVersion() uint32 { return o.peerVersion }
 
 // SendBcst enqueues a bcst atom for forwarding to this downstream peer.
 func (o *PCPOutputStream) SendBcst(atom *pcp.Atom) {
@@ -172,6 +183,8 @@ func (o *PCPOutputStream) handshake(admitted bool) (startPos uint32, err error) 
 	}
 
 	o.remotePort = remotePort
+	o.peerAgent = helo.Agent
+	o.peerVersion = helo.Version
 
 	// Send oleh.
 	oleh := (&pcp.HeloPacket{

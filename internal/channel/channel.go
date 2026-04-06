@@ -51,6 +51,16 @@ type RelayEvictable interface {
 	IsFirewalled() bool
 }
 
+// RelayNodeInfo is implemented by PCP output streams to expose peer details
+// for relay tree display.
+type RelayNodeInfo interface {
+	PeerID() pcp.GnuID
+	IsFirewalled() bool
+	RemotePort() uint16
+	PeerAgent() string
+	PeerVersion() uint32
+}
+
 // ConnectionInfo is a snapshot of an active output connection.
 type ConnectionInfo struct {
 	ID         int
@@ -503,6 +513,36 @@ func (c *Channel) Connections() []ConnectionInfo {
 		}
 	}
 	return result
+}
+
+// RelayNodeEntry is a snapshot of a downstream relay peer.
+type RelayNodeEntry struct {
+	SessionID   pcp.GnuID
+	RemoteAddr  string
+	RemotePort  uint16
+	IsFirewalled bool
+	Agent       string
+	Version     uint32
+}
+
+// RelayNodes returns info about downstream PCP relay peers.
+func (c *Channel) RelayNodes() []RelayNodeEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var nodes []RelayNodeEntry
+	for _, o := range c.outputs {
+		if rn, ok := o.(RelayNodeInfo); ok {
+			nodes = append(nodes, RelayNodeEntry{
+				SessionID:    rn.PeerID(),
+				RemoteAddr:   o.RemoteAddr(),
+				RemotePort:   rn.RemotePort(),
+				IsFirewalled: rn.IsFirewalled(),
+				Agent:        rn.PeerAgent(),
+				Version:      rn.PeerVersion(),
+			})
+		}
+	}
+	return nodes
 }
 
 // CloseConnection closes the output connection with the given ID.

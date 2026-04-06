@@ -30,6 +30,29 @@ type relayTreeNode struct {
 }
 
 func (s *Server) getChannelRelayTree(ch *channel.Channel) (interface{}, *rpcError) {
+	// Build children from downstream relay nodes.
+	relayNodes := ch.RelayNodes()
+	children := make([]relayTreeNode, 0, len(relayNodes))
+	for _, rn := range relayNodes {
+		host, _, _ := net.SplitHostPort(rn.RemoteAddr)
+		children = append(children, relayTreeNode{
+			SessionID:     gnuIDString(rn.SessionID),
+			Address:       host,
+			Port:          int(rn.RemotePort),
+			IsFirewalled:  rn.IsFirewalled,
+			LocalRelays:   0,
+			LocalDirects:  0,
+			IsTracker:     false,
+			IsRelayFull:   false,
+			IsDirectFull:  false,
+			IsReceiving:   true,
+			IsControlFull: false,
+			Version:       int(rn.Version),
+			VersionString: rn.Agent,
+			Children:      []relayTreeNode{},
+		})
+	}
+
 	thisNode := relayTreeNode{
 		SessionID:     gnuIDString(s.sessionID),
 		Address:       "",
@@ -44,7 +67,7 @@ func (s *Server) getChannelRelayTree(ch *channel.Channel) (interface{}, *rpcErro
 		IsControlFull: false,
 		Version:       version.PCPVersion,
 		VersionString: version.AgentName,
-		Children:      []relayTreeNode{},
+		Children:      children,
 	}
 
 	if upstream := ch.UpstreamAddr(); upstream != "" {
