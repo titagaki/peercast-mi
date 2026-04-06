@@ -127,6 +127,42 @@ body {
   font-size: 0.85em;
 }
 
+.broadcast-form {
+  border: 1px solid #ccc3;
+  border-radius: 4px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: #0001;
+}
+
+.broadcast-form-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 0.75rem;
+  align-items: center;
+}
+
+.broadcast-form-grid label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.broadcast-form-grid input,
+.broadcast-form-grid select {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.broadcast-form-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
 .detail-panel {
   margin-top: 1.5rem;
   padding: 1rem;

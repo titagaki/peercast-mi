@@ -102,6 +102,27 @@ export type ChannelConnection = {
   remoteEndPoint: string | null;
 };
 
+export type BroadcastParam = {
+  streamKey: string;
+  info: {
+    name: string;
+    genre?: string;
+    url?: string;
+    desc?: string;
+    comment?: string;
+    bitrate?: number;
+  };
+  track?: {
+    title?: string;
+    creator?: string;
+    album?: string;
+    url?: string;
+  };
+};
+
+export const broadcastChannel = (param: BroadcastParam) =>
+  rpc<{ channelId: string }>("broadcastChannel", [param]);
+
 export const getChannels = () => rpc<ChannelEntry[]>("getChannels");
 export const stopChannel = (channelId: string) =>
   rpc<null>("stopChannel", [channelId]);
