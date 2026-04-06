@@ -29,7 +29,7 @@ export default function App() {
           className={tab === "status" ? "active" : ""}
           onClick={() => setTab("status")}
         >
-          Status
+          Info
         </button>
       </nav>
       <main className="app-main">

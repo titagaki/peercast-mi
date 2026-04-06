@@ -88,7 +88,7 @@ export function StatusPage() {
               <th>ID</th>
               <th>Name</th>
               <th>URI</th>
-              <th>Channels</th>
+              <th>Broadcasting Channels</th>
             </tr>
           </thead>
           <tbody>
