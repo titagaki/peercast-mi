@@ -86,6 +86,7 @@ func (o *PCPOutputStream) SendBcst(atom *pcp.Atom) {
 func (o *PCPOutputStream) runStreaming(startPos uint32) {
 	defer slog.Info("pcp: relay disconnected", "remote", o.remoteAddr, "id", o.id)
 	defer o.conn.Close()
+	defer o.ch.RemoveNodeStats(o.peerID)
 
 	if err := o.sendInitial(); err != nil {
 		slog.Error("pcp: send initial error", "remote", o.remoteAddr, "id", o.id, "err", err)
@@ -252,12 +253,13 @@ func (o *PCPOutputStream) buildHostAtom() *pcp.Atom {
 		GlobalIP:     o.globalIP,
 		ListenPort:   o.listenPort,
 		ChannelID:    o.ch.ID,
-		NumListeners: o.ch.NumListeners(),
-		NumRelays:    o.ch.NumRelays(),
+		NumListeners: o.ch.TotalListeners(),
+		NumRelays:    o.ch.TotalRelays(),
 		Uptime:       o.ch.UptimeSeconds(),
 		OldPos:       o.ch.OldestPos(),
 		NewPos:       o.ch.NewestPos(),
 		IsTracker:    o.ch.IsBroadcasting(),
+		IsReceiving:  o.ch.HasData(),
 		HasGlobalIP:  o.globalIP != 0,
 		RelayFull:    o.ch.IsRelayFull(o.maxRelays),
 		DirectFull:   o.ch.IsDirectFull(o.maxListeners),
@@ -548,13 +550,41 @@ func (o *PCPOutputStream) forwardBcst(a *pcp.Atom) {
 	}
 	// Cache any Host atom payload so that SelectSourceHosts can hand it out
 	// as an alternative relay candidate when this node is full.
+	// Also extract NumListeners/NumRelays to update downstream node stats
+	// (PeerCastStation 互換: OnPCPHost で DirectCount/RelayCount を記録)。
 	if host := a.FindChild(pcp.PCPHost); host != nil {
 		o.ch.AddKnownHost(host)
+		extractNodeStats(host, o.ch)
 	}
 	// Rebuild bcst with decremented TTL and incremented hops.
 	forwarded := rebuildBcst(a, ttl)
 	o.ch.Broadcast(o, forwarded)
 	slog.Debug("pcp: bcst forwarded from downstream", "remote", o.remoteAddr, "id", o.id, "ttl", ttl-1)
+}
+
+// extractNodeStats extracts the session ID, NumListeners, and NumRelays from
+// a HOST atom and updates the channel's downstream node stats.
+func extractNodeStats(host *pcp.Atom, ch *channel.Channel) {
+	sidAtom := host.FindChild(pcp.PCPHostID)
+	if sidAtom == nil {
+		return
+	}
+	sid, err := sidAtom.GetID()
+	if err != nil {
+		return
+	}
+	var listeners, relays int
+	if a := host.FindChild(pcp.PCPHostNumListeners); a != nil {
+		if v, err := a.GetInt(); err == nil {
+			listeners = int(v)
+		}
+	}
+	if a := host.FindChild(pcp.PCPHostNumRelays); a != nil {
+		if v, err := a.GetInt(); err == nil {
+			relays = int(v)
+		}
+	}
+	ch.UpdateNodeStats(sid, listeners, relays)
 }
 
 // rebuildBcst creates a new bcst atom with TTL decremented by 1 and hops incremented by 1.

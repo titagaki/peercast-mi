@@ -95,6 +95,17 @@ type Channel struct {
 	// Used by SelectSourceHosts to hand out alternative relay candidates when
 	// this node has no free relay slots (PeerCastStation 互換: Channel.Nodes).
 	knownHosts []*pcp.Atom
+
+	// nodeStats tracks per-downstream-node listener/relay counts reported
+	// via BCST HOST atoms. Keyed by session ID.
+	// PeerCastStation 互換: Channel.Nodes の DirectCount / RelayCount。
+	nodeStats map[pcp.GnuID]nodeStats
+}
+
+// nodeStats holds the listener/relay counts reported by a downstream node.
+type nodeStats struct {
+	Listeners int
+	Relays    int
 }
 
 const maxKnownHosts = 32
@@ -393,6 +404,50 @@ func (c *Channel) NumRelays() int {
 	return c.numRelays
 }
 
+// UpdateNodeStats updates the listener/relay counts for a downstream node
+// identified by its session ID. Called when a BCST HOST atom is received.
+// PeerCastStation 互換: Channel.AddNode で DirectCount / RelayCount を記録。
+func (c *Channel) UpdateNodeStats(sessionID pcp.GnuID, listeners, relays int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.nodeStats == nil {
+		c.nodeStats = make(map[pcp.GnuID]nodeStats)
+	}
+	c.nodeStats[sessionID] = nodeStats{Listeners: listeners, Relays: relays}
+}
+
+// RemoveNodeStats removes the downstream node stats for the given session ID.
+// Called when a PCP output stream disconnects.
+func (c *Channel) RemoveNodeStats(sessionID pcp.GnuID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.nodeStats, sessionID)
+}
+
+// TotalListeners returns NumListeners (local) plus all downstream nodes'
+// listener counts. PeerCastStation 互換: TotalDirects.
+func (c *Channel) TotalListeners() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	total := c.numListeners
+	for _, ns := range c.nodeStats {
+		total += ns.Listeners
+	}
+	return total
+}
+
+// TotalRelays returns NumRelays (local) plus all downstream nodes'
+// relay counts. PeerCastStation 互換: TotalRelays.
+func (c *Channel) TotalRelays() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	total := c.numRelays
+	for _, ns := range c.nodeStats {
+		total += ns.Relays
+	}
+	return total
+}
+
 // CloseAll closes all registered output streams.
 func (c *Channel) CloseAll() {
 	c.mu.Lock()
@@ -400,6 +455,7 @@ func (c *Channel) CloseAll() {
 	c.outputs = nil
 	c.numListeners = 0
 	c.numRelays = 0
+	c.nodeStats = nil
 	c.mu.Unlock()
 	for _, o := range outputs {
 		o.Close()

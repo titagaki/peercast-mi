@@ -30,6 +30,12 @@ type HostAtomParams struct {
 	// TrackerAtom adds an explicit pcp.PCPHostTracker atom (used in YP bcst).
 	TrackerAtom bool
 
+	// IsReceiving indicates that data is actually flowing (RTMP push active
+	// or relay stream connected). When false the PCPHostFlags1Recv flag is
+	// not set in the host atom. PeerCastStation 互換: Receiving フラグは
+	// 実際にデータを受信しているときのみ立てる。
+	IsReceiving bool
+
 	// Optional upstream host info (for relay/YP bcst).
 	UphostIP   uint32
 	UphostPort uint16
@@ -43,7 +49,10 @@ type HostAtomParams struct {
 // (LAN) endpoint. HostPacket.BuildAtom() only emits one pair, so we
 // build the atom manually here.
 func BuildHostAtom(p HostAtomParams) *pcp.Atom {
-	flags := byte(pcp.PCPHostFlags1Recv | pcp.PCPHostFlags1CIN)
+	flags := byte(pcp.PCPHostFlags1CIN)
+	if p.IsReceiving {
+		flags |= pcp.PCPHostFlags1Recv
+	}
 	if !p.RelayFull {
 		flags |= pcp.PCPHostFlags1Relay
 	}

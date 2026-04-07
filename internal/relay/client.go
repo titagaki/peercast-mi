@@ -467,6 +467,7 @@ func (c *Client) buildRelayBcstAtom(localIP, uphostIP uint32, uphostPort uint16)
 		Uptime:       c.ch.UptimeSeconds(),
 		OldPos:       c.ch.OldestPos(),
 		NewPos:       c.ch.NewestPos(),
+		IsReceiving:  c.ch.HasData(),
 		HasGlobalIP:  globalIP != 0,
 		UphostIP:     uphostIP,
 		UphostPort:   uphostPort,
