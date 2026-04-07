@@ -76,35 +76,21 @@ addr = "pcp://localhost:7144/"
 
 ## チャンネルの作成と配信
 
-`ui/peercast-mm-api-client.html` はブラウザから操作できる Web UI。`file://` で直接開くと CORS エラーになるため、Python の簡易 HTTP サーバーで配信する。
+`ui/` ディレクトリに React ベースの Web UI がある。
 
 ```sh
-python3 -m http.server 8080 --directory ui/
-# → http://localhost:8080/peercast-mi-api-client.html
+cd ui
+npm install
+npm run dev
+# → http://localhost:5173/
 ```
 
-localhost 以外のマシンからアクセスする場合は `config.toml` で Basic 認証を設定する。
-
-```toml
-admin_user = "admin"
-admin_pass = "your-password"
-```
-
-チャンネルは JSON-RPC API を使って動的に作成する。
+バックエンド (ポート 7144) が起動していれば、そのまま操作できる。
 
 ### 1. ストリームキーを発行する
 
-```sh
-curl -s -X POST http://localhost:7144/api/1 \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"issueStreamKey","params":[],"id":1}'
-```
-
-```json
-{"jsonrpc":"2.0","id":1,"result":{"streamKey":"sk_a1b2c3d4e5f6..."}}
-```
-
-ストリームキーはプロセスが終了するまで有効。チャンネルを止めても失効しない。
+Web UI の **Stream Keys** タブでアカウント名とストリームキーを入力し、**Issue** ボタンを押す。
+ストリームキーはプロセスが終了しても有効（ファイルに永続化される）。
 
 ### 2. エンコーダーを接続する
 
@@ -112,45 +98,18 @@ OBS Studio の設定:
 
 - **サービス:** カスタム
 - **サーバー:** `rtmp://localhost/live`
-- **ストリームキー:** 手順 1 で取得したキー (`sk_a1b2c3d4e5f6...`)
+- **ストリームキー:** 手順 1 で発行したキー
 
 エンコーダーの接続はこの時点で行ってもよいし、手順 3 の後でもよい。
 ストリームキーが発行済みであれば RTMP 接続は受け付けられる。
 
 ### 3. チャンネルを開始する
 
-```sh
-curl -s -X POST http://localhost:7144/api/1 \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "jsonrpc":"2.0","method":"broadcastChannel","params":[{
-      "streamKey": "sk_a1b2c3d4e5f6...",
-      "info": {
-        "name":    "テスト配信",
-        "genre":   "ゲーム",
-        "url":     "https://example.com",
-        "desc":    "",
-        "comment": "",
-        "bitrate": 3000
-      },
-      "track": {"title":"","creator":"","album":"","url":""}
-    }],"id":2}'
-```
-
-```json
-{"jsonrpc":"2.0","id":2,"result":{"channelId":"0123456789abcdef0123456789abcdef"}}
-```
-
-同じパラメータで再度呼び出すと同じ `channelId` が返る（決定論的生成）。
+**Channels** タブの **Broadcast** ボタンを押し、ストリームキー・チャンネル名などを入力して **Start Broadcast** を押す。
 
 ### 4. チャンネルを停止する
 
-```sh
-curl -s -X POST http://localhost:7144/api/1 \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"stopChannel","params":["0123456789abcdef0123456789abcdef"],"id":3}'
-```
-
+**Channels** タブのチャンネル一覧から対象チャンネルの **Stop** ボタンを押す。
 チャンネルが停止してもストリームキーは残るため、手順 3 から繰り返せる。
 
 ## 視聴・リレー
