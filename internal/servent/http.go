@@ -84,12 +84,20 @@ func (o *HTTPOutputStream) run() {
 			// data arrived
 		case <-o.closeCh:
 			return
-		case <-time.After(30 * time.Second):
+		case <-time.After(firstDataTimeout):
+			slog.Info("http: no data within timeout", "remote", o.remoteAddr, "id", o.id)
 			return
 		}
 	}
 
-	// Send stream header (FLV header / codec config).
+	// Send stream header (FLV header / codec config). A header notification
+	// queued while waiting above (the relay's first header arrived after this
+	// output was added) is covered by the read below; drop it so the header
+	// is not sent twice.
+	select {
+	case <-o.headerCh:
+	default:
+	}
 	header, _ := o.ch.Header()
 	if len(header) > 0 {
 		o.conn.SetWriteDeadline(time.Now().Add(directWriteTimeout))
