@@ -52,6 +52,10 @@ type Manager struct {
 	// NewRelay creates relay clients for StartRelay. Nil disables on-demand relay.
 	NewRelay RelayFactory
 
+	// MaxRelayChannels caps the number of relay channels StartRelay keeps
+	// at once. 0 means unlimited.
+	MaxRelayChannels int
+
 	globalIP atomic.Uint32 // learned from YP; handed to new relay clients
 
 	mu            sync.RWMutex
@@ -189,9 +193,15 @@ func (m *Manager) AddRelayChannel(ch *Channel, r RelayHandle) {
 // ErrNoRelayFactory is returned by StartRelay when NewRelay is not set.
 var ErrNoRelayFactory = errors.New("channel: relay factory not configured")
 
+// ErrRelayChannelLimit is returned by StartRelay when MaxRelayChannels relay
+// channels are already active.
+var ErrRelayChannelLimit = errors.New("channel: relay channel limit reached")
+
 // StartRelay creates a relay channel for channelID sourced from upstreamAddr,
 // registers it, and starts its relay client. If the channel is already
 // active (broadcast or relay) it is returned as-is and nothing is started.
+// A new relay is refused with ErrRelayChannelLimit when MaxRelayChannels
+// relay channels already exist.
 //
 // When the relay client gives up (all hosts exhausted / tracker off-air) the
 // channel is removed from the manager so that a subsequent viewer request
@@ -204,6 +214,10 @@ func (m *Manager) StartRelay(channelID pcp.GnuID, upstreamAddr string) (*Channel
 	if ch, ok := m.byID[channelID]; ok {
 		m.mu.Unlock()
 		return ch, nil
+	}
+	if m.MaxRelayChannels > 0 && len(m.relays) >= m.MaxRelayChannels {
+		m.mu.Unlock()
+		return nil, ErrRelayChannelLimit
 	}
 	ch := New(channelID, pcp.GnuID{}, 0)
 	// Set fields directly: ch is not yet visible to other goroutines.

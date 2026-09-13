@@ -165,7 +165,8 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 ```
 1. プレイヤーが /pls/<channelId>[?tip=<host:port>] または /stream/<channelId>[.flv][?tip=<host:port>] にアクセス
    (/channel/ (PCP) への直接アクセスでは自動リレーは開始せず 404 を返す)
-2. Listener がチャンネル未登録を検出し、OnDemandRelay フック → Manager.StartRelay() を呼ぶ
+2. Listener がチャンネル未登録を検出し、送信元が許可されていれば (relay_request_from、既定はループバック + プライベートアドレス)
+   OnDemandRelay フック → Manager.StartRelay() を呼ぶ (max_relay_channels に達していれば 503)
    ↳ tip がなければ先に relay.FindTracker() で config の全 [[yp]] に順に問い合わせ、tracker の host:port を得る
      (-yp で選んだ YP に限らない)。どの YP も知らなければ 404
 3. Manager が Channel (IsBroadcasting=false) を生成して登録し、NewRelay で RelayClient を生成

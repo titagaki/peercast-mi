@@ -60,8 +60,16 @@ func main() {
 		return relay.New(upstreamAddr, ch.ID, sessionID, uint16(cfg.PeercastPort), ch)
 	}
 
+	mgr.MaxRelayChannels = cfg.MaxRelayChannels
+
 	// Start OutputListener.
 	listener := servent.NewListener(sessionID, mgr, cfg.PeercastPort, cfg.MaxRelays, cfg.MaxRelaysTotal, cfg.MaxListeners, cfg.MaxUpstreamKbps)
+	relayFromAny, err := cfg.RelayRequestFromAny()
+	if err != nil {
+		slog.Error("config: invalid", "err", err)
+		os.Exit(1)
+	}
+	listener.RelayRequestFromAny = relayFromAny
 	if err := listener.Listen(); err != nil {
 		slog.Error("output: listen failed", "err", err)
 		os.Exit(1)

@@ -573,9 +573,13 @@ bcst
 
 チャンネル解決 (lookupChannel):
   1. Manager.GetByID にあればそれを使う (tip は無視。既存の接続先は変えず、リレーも作り直さない)
-  2. なければ OnDemandRelay(channelID, tip) を呼ぶ (main.go → tip が空なら relay.FindTracker で YP に問い合わせ → Manager.StartRelay)
+  2. なければ送信元を確認する: relay_request_from = "private" (既定) のとき、ループバック・
+     プライベート (RFC 1918, fc00::/7)・リンクローカル以外の送信元は 403 (リレーを開始しない)。
+     "any" なら制限なし。登録済みチャンネルの視聴 (1.) には適用しない
+  3. OnDemandRelay(channelID, tip) を呼ぶ (main.go → tip が空なら relay.FindTracker で YP に問い合わせ → Manager.StartRelay)
      生成と登録は Manager.StartRelay のロック下で 1 回だけ行われるので、同時要求でリレーは重複しない
-     OnDemandRelay 未設定または失敗 (tracker 不明、接続先未指定で YP も知らない等) → 404
+     Manager.MaxRelayChannels (max_relay_channels) に達していれば ErrRelayChannelLimit → 503
+     OnDemandRelay 未設定またはその他の失敗 (tracker 不明、接続先未指定で YP も知らない等) → 404
 ```
 
 レスポンスは body を書き始める前に決まる HTTP/1.0 のステータス行のみ:
@@ -583,7 +587,9 @@ bcst
 | 状況 | `/pls/` | `/stream/` |
 |:---|:---|:---|
 | パス・tip の形式不正 | 400 | 400 |
+| チャンネル未登録で、送信元がリレー開始を許可されていない | 403 | 403 |
 | チャンネル未登録でリレーを開始できない | 404 | 404 |
+| チャンネル未登録で、リレーチャンネル数が上限 | 503 | 503 |
 | `tryAdmit` 失敗 (視聴数・帯域上限) | — | 503 |
 | 成功 | 200 + M3U | 200 + ストリーム (4.9) |
 

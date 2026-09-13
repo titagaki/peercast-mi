@@ -69,10 +69,32 @@ func newRelayListener(t *testing.T, factory channel.RelayFactory, maxListeners i
 	mgr.NewRelay = factory
 	t.Cleanup(mgr.StopAll)
 	l := NewListener(pcp.GnuID{}, mgr, 7144, 0, 0, maxListeners, 0)
+	l.RelayRequestFromAny = true // net.Pipe の remote はプライベート判定できない
 	l.OnDemandRelay = func(id pcp.GnuID, tip string) (*channel.Channel, error) {
 		return mgr.StartRelay(id, tip)
 	}
 	return l, mgr
+}
+
+// addrConn は RemoteAddr を差し替えた net.Conn (送信元判定のテスト用)。
+type addrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c addrConn) RemoteAddr() net.Addr { return c.remote }
+
+// openStreamFrom は remote から来た接続として /stream/ を要求する。
+func openStreamFrom(t *testing.T, l *Listener, remote net.Addr, path string) *streamViewer {
+	t.Helper()
+	server, client := net.Pipe()
+	v := &streamViewer{client: client, done: make(chan struct{})}
+	go func() {
+		l.handleHTTPStream(newCountingConn(addrConn{server, remote}), bufio.NewReader(server))
+		close(v.done)
+	}()
+	v.readHeaders(t, path)
+	return v
 }
 
 // streamViewer は net.Pipe の client 側から /stream/ を要求する疑似プレイヤー。
@@ -92,6 +114,14 @@ func openStream(t *testing.T, l *Listener, path string) *streamViewer {
 		l.handleHTTPStream(newCountingConn(server), bufio.NewReader(server))
 		close(v.done)
 	}()
+	v.readHeaders(t, path)
+	return v
+}
+
+// readHeaders はリクエストを送ってレスポンスヘッダーまで読む。
+func (v *streamViewer) readHeaders(t *testing.T, path string) {
+	t.Helper()
+	client := v.client
 	type hdr struct {
 		resp *http.Response
 		err  error
@@ -115,7 +145,6 @@ func openStream(t *testing.T, l *Listener, path string) *streamViewer {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("%s: no response headers", path)
 	}
-	return v
 }
 
 // readBody は body を n バイト (n < 0 なら EOF まで) 読む。
@@ -377,4 +406,82 @@ func TestHTTPStream_RelayStopped(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("handler did not return after the relay stopped")
 	}
+}
+
+// TestHTTPStream_RelayRequestFrom は既定 (private) では未登録チャンネルのリレー開始を
+// ループバック・プライベートアドレスからしか受け付けず、登録済みチャンネルの視聴は
+// 送信元によらず許可することを確認する。
+func TestHTTPStream_RelayRequestFrom(t *testing.T) {
+	global := &net.TCPAddr{IP: net.ParseIP("203.0.113.9"), Port: 50000}
+	private := []net.Addr{
+		&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 50000},
+		&net.TCPAddr{IP: net.ParseIP("::1"), Port: 50000},
+		&net.TCPAddr{IP: net.ParseIP("192.168.1.10"), Port: 50000},
+		&net.TCPAddr{IP: net.ParseIP("10.0.0.5"), Port: 50000},
+		&net.TCPAddr{IP: net.ParseIP("172.16.0.5"), Port: 50000},
+		&net.TCPAddr{IP: net.ParseIP("fd00::5"), Port: 50000},
+	}
+	path := "/stream/" + testChannelHex + ".flv?tip=" + testTip
+
+	t.Run("global remote refused", func(t *testing.T) {
+		l, mgr := newRelayListener(t, stubFactory(feedFLV), 0)
+		l.RelayRequestFromAny = false
+		v := openStreamFrom(t, l, global, path)
+		if v.resp.StatusCode != 403 {
+			t.Fatalf("status %d, want 403", v.resp.StatusCode)
+		}
+		v.close(t)
+		if _, ok := mgr.GetByID(testChannelID); ok {
+			t.Fatal("relay must not be started for a refused remote")
+		}
+	})
+	t.Run("private remotes allowed", func(t *testing.T) {
+		for _, remote := range private {
+			l, mgr := newRelayListener(t, stubFactory(feedFLV), 0)
+			l.RelayRequestFromAny = false
+			v := openStreamFrom(t, l, remote, path)
+			wantFLV(t, v)
+			v.close(t)
+			mgr.StopAll()
+		}
+	})
+	t.Run("global remote may view a registered channel", func(t *testing.T) {
+		l, mgr := newRelayListener(t, stubFactory(feedFLV), 0)
+		l.RelayRequestFromAny = false
+		ch := channel.New(testChannelID, pcp.GnuID{}, 0)
+		feedFLV(ch)
+		mgr.AddRelayChannel(ch, newStubRelay(ch, nil))
+		v := openStreamFrom(t, l, global, path)
+		wantFLV(t, v)
+		v.close(t)
+	})
+	t.Run("any", func(t *testing.T) {
+		l, _ := newRelayListener(t, stubFactory(feedFLV), 0)
+		l.RelayRequestFromAny = true
+		v := openStreamFrom(t, l, global, path)
+		wantFLV(t, v)
+		v.close(t)
+	})
+}
+
+// TestHTTPStream_RelayChannelLimit は max_relay_channels に達したら新しいリレーを
+// 503 で断り、既存のリレーチャンネルの視聴は続けられることを確認する。
+func TestHTTPStream_RelayChannelLimit(t *testing.T) {
+	l, mgr := newRelayListener(t, stubFactory(feedFLV), 0)
+	mgr.MaxRelayChannels = 1
+
+	first := openStream(t, l, "/stream/"+testChannelHex+".flv?tip="+testTip)
+	wantFLV(t, first)
+
+	const otherHex = "101112131415161718191a1b1c1d1e1f"
+	second := openStream(t, l, "/stream/"+otherHex+".flv?tip="+testTip)
+	if second.resp.StatusCode != 503 {
+		t.Fatalf("status %d, want 503", second.resp.StatusCode)
+	}
+	second.close(t)
+
+	again := openStream(t, l, "/stream/"+testChannelHex+".flv")
+	wantFLV(t, again)
+	again.close(t)
+	first.close(t)
 }

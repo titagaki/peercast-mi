@@ -178,6 +178,7 @@ func TestHandlePLS_CallsOnDemandRelayWithoutTip(t *testing.T) {
 		{"?tip=203.0.113.9:7144", "203.0.113.9:7144"},
 	} {
 		l := NewListener(pcp.GnuID{}, notFoundStore{}, 7144, 0, 0, 0, 0)
+		l.RelayRequestFromAny = true
 		var gotTip string
 		called := false
 		l.OnDemandRelay = func(id pcp.GnuID, tip string) (*channel.Channel, error) {
@@ -213,6 +214,7 @@ func TestHandlePLS_Errors(t *testing.T) {
 		{"/pls/000102030405060708090a0b0c0d0e0f", "HTTP/1.0 404 Not Found"},
 	} {
 		l := NewListener(pcp.GnuID{}, notFoundStore{}, 7144, 0, 0, 0, 0)
+		l.RelayRequestFromAny = true
 		server, client := net.Pipe()
 		go l.handlePLS(newCountingConn(server), bufio.NewReader(server))
 		status, _ := httpGet(t, client, tc.path)
@@ -268,6 +270,35 @@ func TestParseTip(t *testing.T) {
 		got, ok := parseTip(tc.tip)
 		if ok != tc.ok || (ok && got != tc.tip) {
 			t.Errorf("%q: got %q ok=%v, want ok=%v", tc.tip, got, ok, tc.ok)
+		}
+	}
+}
+
+// TestHandlePLS_RelayRequestFrom は /pls/ でも未登録チャンネルのリレー開始が送信元で
+// 制限される (既定はプライベートのみ) ことを確認する。
+func TestHandlePLS_RelayRequestFrom(t *testing.T) {
+	for _, tc := range []struct {
+		remote     net.Addr
+		fromAny    bool
+		wantStatus string
+		wantCalled bool
+	}{
+		{&net.TCPAddr{IP: net.ParseIP("203.0.113.9"), Port: 50000}, false, "HTTP/1.0 403 Forbidden", false},
+		{&net.TCPAddr{IP: net.ParseIP("192.168.1.10"), Port: 50000}, false, "HTTP/1.0 200 OK", true},
+		{&net.TCPAddr{IP: net.ParseIP("203.0.113.9"), Port: 50000}, true, "HTTP/1.0 200 OK", true},
+	} {
+		l := NewListener(pcp.GnuID{}, notFoundStore{}, 7144, 0, 0, 0, 0)
+		l.RelayRequestFromAny = tc.fromAny
+		called := false
+		l.OnDemandRelay = func(id pcp.GnuID, tip string) (*channel.Channel, error) {
+			called = true
+			return channel.New(id, pcp.GnuID{}, 0), nil
+		}
+		server, client := net.Pipe()
+		go l.handlePLS(newCountingConn(addrConn{server, tc.remote}), bufio.NewReader(server))
+		status, _ := httpGet(t, client, "/pls/000102030405060708090a0b0c0d0e0f?tip=203.0.113.9:7144")
+		if status != tc.wantStatus || called != tc.wantCalled {
+			t.Fatalf("remote %v any=%v: status %q called=%v, want %q called=%v", tc.remote, tc.fromAny, status, called, tc.wantStatus, tc.wantCalled)
 		}
 	}
 }

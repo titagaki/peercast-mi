@@ -439,3 +439,26 @@ func TestSetGlobalIP_PropagatesToActiveRelays(t *testing.T) {
 		t.Fatalf("relay global IP = %x", r.globalIP)
 	}
 }
+
+func TestStartRelay_MaxRelayChannels(t *testing.T) {
+	mgr := NewManager(pcp.GnuID{})
+	mgr.MaxRelayChannels = 1
+	mgr.NewRelay = func(ch *Channel, addr string) RelayHandle { return &fakeRelay{} }
+
+	first, err := mgr.StartRelay(pcp.GnuID{1}, "203.0.113.1:7144")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.StartRelay(pcp.GnuID{2}, "203.0.113.1:7144"); err != ErrRelayChannelLimit {
+		t.Fatalf("second relay: err = %v, want ErrRelayChannelLimit", err)
+	}
+	// 既存チャンネルは上限に関係なく返る。
+	if again, err := mgr.StartRelay(pcp.GnuID{1}, "203.0.113.1:7144"); err != nil || again != first {
+		t.Fatalf("existing relay: %v %v", again, err)
+	}
+	// 1 つ止めれば次を開始できる。
+	mgr.Stop(pcp.GnuID{1})
+	if _, err := mgr.StartRelay(pcp.GnuID{2}, "203.0.113.1:7144"); err != nil {
+		t.Fatalf("after stop: %v", err)
+	}
+}

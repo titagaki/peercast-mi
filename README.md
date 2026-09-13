@@ -63,6 +63,14 @@ peercast_port = 7144
 # 視聴・リレーのないリレーチャンネルを自動削除するまでの分数 (デフォルト: 20、0 = 無効)
 # channel_cleanup_minutes = 20
 
+# 未登録チャンネルへの /pls/ /stream/ でオンデマンドリレーを開始できる送信元 (デフォルト: "private")
+# "private" = ループバックとプライベートアドレス (LAN) のみ、"any" = 制限なし。
+# 登録済みチャンネルの視聴には影響しない
+# relay_request_from = "private"
+
+# オンデマンドリレーで同時に保持するリレーチャンネル数の上限 (デフォルト: 0 = 無制限)
+# max_relay_channels = 8
+
 # 非 localhost からの JSON-RPC アクセスに要求する Basic 認証 (どちらか未設定なら非 localhost を拒否)
 # admin_user = "admin"
 # admin_pass = "secret"

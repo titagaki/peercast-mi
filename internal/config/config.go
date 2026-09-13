@@ -56,6 +56,14 @@ type Config struct {
 	// 視聴・リレーのないリレーチャンネルがこの時間継続すると自動削除される。
 	// 0 は自動切断を無効にする。デフォルト 20 分。
 	ChannelCleanupMinutes int `toml:"channel_cleanup_minutes"`
+	// RelayRequestFrom は未登録チャンネルへの /pls/ /stream/ 要求で
+	// オンデマンドリレーを開始できる送信元。"private" (デフォルト) は
+	// ループバックとプライベートアドレス (RFC 1918 / fc00::/7 / リンクローカル)
+	// のみ、"any" は制限なし。登録済みチャンネルの視聴には影響しない。
+	RelayRequestFrom string `toml:"relay_request_from"`
+	// MaxRelayChannels はオンデマンドリレーで同時に保持するリレーチャンネル数の
+	// 上限。0 は無制限。
+	MaxRelayChannels int `toml:"max_relay_channels"`
 	// AdminUser / AdminPass は非 localhost からの JSON-RPC アクセスに使う
 	// Basic 認証の資格情報。どちらか空の場合は非 localhost を拒否する。
 	AdminUser string `toml:"admin_user"`
@@ -73,6 +81,20 @@ func defaults() Config {
 		PeercastPort:          7144,
 		LogLevel:              "info",
 		ChannelCleanupMinutes: 20,
+		RelayRequestFrom:      "private",
+	}
+}
+
+// RelayRequestFromAny reports whether any remote may start an on-demand
+// relay. Returns an error for an unknown RelayRequestFrom value.
+func (c *Config) RelayRequestFromAny() (bool, error) {
+	switch strings.ToLower(c.RelayRequestFrom) {
+	case "", "private":
+		return false, nil
+	case "any":
+		return true, nil
+	default:
+		return false, fmt.Errorf("config: relay_request_from must be \"private\" or \"any\", got %q", c.RelayRequestFrom)
 	}
 }
 

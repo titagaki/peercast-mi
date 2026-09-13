@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -51,7 +52,13 @@ type Listener struct {
 	nextConnID      atomic.Int64
 	apiHandler      http.Handler      // JSON-RPC handler for POST /api/; may be nil
 	OnDemandRelay   OnDemandRelayFunc // optional: auto-start relay on /pls/ and /stream/ requests
-	admitMu         sync.Mutex        // serializes global limit check + TryAddOutput
+	// RelayRequestFromAny lets any remote start an on-demand relay. When
+	// false (the default from config) only loopback and private addresses
+	// may; other remotes get 403 for unknown channels, like
+	// PeerCastStation's GlobalAccepts without Play and peercast-yt's
+	// isPrivate() gate. Viewing registered channels is not affected.
+	RelayRequestFromAny bool
+	admitMu             sync.Mutex // serializes global limit check + TryAddOutput
 }
 
 // NewListener creates a new Listener.
@@ -200,6 +207,7 @@ func (l *Listener) handlePCPRelay(cc *countingConn, br *bufio.Reader, peek []byt
 // response body has been started.
 const (
 	statusBadRequest         = "HTTP/1.0 400 Bad Request\r\n\r\n"
+	statusForbidden          = "HTTP/1.0 403 Forbidden\r\n\r\n"
 	statusNotFound           = "HTTP/1.0 404 Not Found\r\n\r\n"
 	statusServiceUnavailable = "HTTP/1.0 503 Service Unavailable\r\n\r\n"
 )
@@ -282,20 +290,42 @@ func parseTip(tip string) (string, bool) {
 // lookupChannel returns the channel for channelID, starting an on-demand
 // relay through OnDemandRelay when it is not registered. Creation and
 // registration happen once inside OnDemandRelay (Manager.StartRelay), so
-// concurrent requests for the same channel share one relay.
-func (l *Listener) lookupChannel(channelID pcp.GnuID, tip string, remote net.Addr) (*channel.Channel, bool) {
+// concurrent requests for the same channel share one relay. When no channel
+// results, the HTTP status line to answer with is returned.
+func (l *Listener) lookupChannel(channelID pcp.GnuID, tip string, remote net.Addr) (*channel.Channel, string) {
 	if ch, ok := l.mgr.GetByID(channelID); ok {
-		return ch, true
+		return ch, ""
 	}
 	if l.OnDemandRelay == nil {
-		return nil, false
+		return nil, statusNotFound
+	}
+	if !l.RelayRequestFromAny && !isPrivateAddr(remote) {
+		slog.Info("servent: relay request refused (remote not private)", "remote", remote, "id", hex.EncodeToString(channelID[:]))
+		return nil, statusForbidden
 	}
 	ch, err := l.OnDemandRelay(channelID, tip)
 	if err != nil {
 		slog.Warn("servent: auto-relay failed", "remote", remote, "id", hex.EncodeToString(channelID[:]), "tip", tip, "err", err)
-		return nil, false
+		if errors.Is(err, channel.ErrRelayChannelLimit) {
+			return nil, statusServiceUnavailable
+		}
+		return nil, statusNotFound
 	}
-	return ch, ch != nil
+	if ch == nil {
+		return nil, statusNotFound
+	}
+	return ch, ""
+}
+
+// isPrivateAddr reports whether remote is a loopback, private (RFC 1918 /
+// fc00::/7) or link-local address. Non-IP addresses are not private.
+func isPrivateAddr(remote net.Addr) bool {
+	tcp, ok := remote.(*net.TCPAddr)
+	if !ok {
+		return false
+	}
+	ip := tcp.IP
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader) {
@@ -310,10 +340,10 @@ func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader) {
 		return
 	}
 
-	ch, ok := l.lookupChannel(vr.channelID, vr.tip, cc.RemoteAddr())
-	if !ok {
-		slog.Info("pls: channel not found", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(vr.channelID[:]))
-		io.WriteString(cc, statusNotFound)
+	ch, status := l.lookupChannel(vr.channelID, vr.tip, cc.RemoteAddr())
+	if status != "" {
+		slog.Info("pls: channel unavailable", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(vr.channelID[:]), "status", strings.TrimSpace(status))
+		io.WriteString(cc, status)
 		return
 	}
 
@@ -353,10 +383,10 @@ func (l *Listener) handleHTTPStream(cc *countingConn, br *bufio.Reader) {
 		cc.Close()
 		return
 	}
-	ch, ok := l.lookupChannel(vr.channelID, vr.tip, cc.RemoteAddr())
-	if !ok {
-		slog.Info("http: channel not found", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(vr.channelID[:]))
-		io.WriteString(cc, statusNotFound)
+	ch, status := l.lookupChannel(vr.channelID, vr.tip, cc.RemoteAddr())
+	if status != "" {
+		slog.Info("http: channel unavailable", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(vr.channelID[:]), "status", strings.TrimSpace(status))
+		io.WriteString(cc, status)
 		cc.Close()
 		return
 	}
