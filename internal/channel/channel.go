@@ -78,7 +78,7 @@ type ConnectionInfo struct {
 type Channel struct {
 	ID        pcp.GnuID
 	buffer    *ContentBuffer
-	StartTime time.Time
+	startTime time.Time
 
 	mu             sync.RWMutex
 	broadcastID    pcp.GnuID
@@ -120,7 +120,7 @@ func New(id, broadcastID pcp.GnuID, bufSize int) *Channel {
 		ID:          id,
 		broadcastID: broadcastID,
 		buffer:      NewContentBuffer(bufSize),
-		StartTime:   time.Now(),
+		startTime:   time.Now(),
 	}
 }
 
@@ -481,7 +481,7 @@ func (c *Channel) CloseAll() {
 
 // UptimeSeconds returns the number of seconds since the channel started.
 func (c *Channel) UptimeSeconds() uint32 {
-	return uint32(time.Since(c.StartTime).Seconds())
+	return uint32(time.Since(c.startTime).Seconds())
 }
 
 // AddKnownHost records a Host atom observed via bcst forwarding, deduped by
