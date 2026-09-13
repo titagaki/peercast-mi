@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,13 +27,14 @@ type ChannelStore interface {
 	TotalSendRate() int64
 }
 
-// OnDemandRelayFunc is called by the /pls/ handler when a channel is not
-// found locally. upstreamAddr is the tip query parameter, or "" when the
-// request had none; implementations then have to find the tracker
-// themselves (e.g. by asking the YPs). Implementations should register the
-// channel in the manager and start a relay client.
-// If the channel is already active, implementations should return nil.
-type OnDemandRelayFunc func(channelID pcp.GnuID, upstreamAddr string) error
+// OnDemandRelayFunc is called by the /pls/ and /stream/ handlers when a
+// channel is not found locally. upstreamAddr is the validated tip query
+// parameter, or "" when the request had none; implementations then have to
+// find the tracker themselves (e.g. by asking the YPs). Implementations
+// should register the channel in the manager, start a relay client and
+// return the channel. If the channel is already active, implementations
+// should return it without starting anything.
+type OnDemandRelayFunc func(channelID pcp.GnuID, upstreamAddr string) (*channel.Channel, error)
 
 // Listener accepts incoming connections on the PeerCast port and dispatches them
 // to the appropriate output stream handler.
@@ -48,7 +50,7 @@ type Listener struct {
 	listener        net.Listener
 	nextConnID      atomic.Int64
 	apiHandler      http.Handler      // JSON-RPC handler for POST /api/; may be nil
-	OnDemandRelay   OnDemandRelayFunc // optional: auto-start relay on /pls/ request
+	OnDemandRelay   OnDemandRelayFunc // optional: auto-start relay on /pls/ and /stream/ requests
 	admitMu         sync.Mutex        // serializes global limit check + TryAddOutput
 }
 
@@ -124,9 +126,9 @@ func (l *Listener) handle(conn net.Conn) {
 	case bytes.HasPrefix(peek, []byte("GET /channel/")):
 		l.handlePCPRelay(cc, br, peek)
 	case bytes.HasPrefix(peek, []byte("GET /stream/")):
-		l.handleHTTPStream(cc, br, peek)
+		l.handleHTTPStream(cc, br)
 	case bytes.HasPrefix(peek, []byte("GET /pls/")):
-		l.handlePLS(cc, br, peek)
+		l.handlePLS(cc, br)
 	case bytes.HasPrefix(peek, []byte("pcp\n")):
 		slog.Debug("servent: ping", "remote", conn.RemoteAddr())
 		handlePing(conn, br, l.sessionID)
@@ -153,14 +155,14 @@ func (l *Listener) handlePCPRelay(cc *countingConn, br *bufio.Reader, peek []byt
 	ch, ok := l.mgr.GetByID(channelID)
 	if !ok {
 		slog.Info("pcp: channel not found", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
-		io.WriteString(cc, "HTTP/1.0 404 Not Found\r\n\r\n")
+		io.WriteString(cc, statusNotFound)
 		cc.Close()
 		return
 	}
 	// PeerCastStation 互換: チャンネルがデータ受信中でなければ 404 を返す。
 	if !ch.HasData() {
 		slog.Info("pcp: channel not receiving", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
-		io.WriteString(cc, "HTTP/1.0 404 Not Found\r\n\r\n")
+		io.WriteString(cc, statusNotFound)
 		cc.Close()
 		return
 	}
@@ -194,54 +196,137 @@ func (l *Listener) handlePCPRelay(cc *countingConn, br *bufio.Reader, peek []byt
 	ch.RemoveOutput(h)
 }
 
-func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader, _ []byte) {
+// HTTP status lines written by the /pls/ and /stream/ handlers before any
+// response body has been started.
+const (
+	statusBadRequest         = "HTTP/1.0 400 Bad Request\r\n\r\n"
+	statusNotFound           = "HTTP/1.0 404 Not Found\r\n\r\n"
+	statusServiceUnavailable = "HTTP/1.0 503 Service Unavailable\r\n\r\n"
+)
+
+// viewerRequest is the part of a /pls/ or /stream/ request the handlers act
+// on. It is parsed once by parseViewerRequest so that a handler never reads
+// the request a second time.
+type viewerRequest struct {
+	channelID pcp.GnuID
+	tip       string // validated "host:port", or "" when absent
+	host      string // Host header, or "" when absent
+}
+
+// parseViewerRequest reads one HTTP request and extracts the channel ID from
+// the path (prefix + 32 hex digits, optionally followed by an extension such
+// as ".flv") and the tip query parameter. It returns the HTTP status line to
+// send when the request is malformed.
+func parseViewerRequest(br *bufio.Reader, prefix string) (viewerRequest, string, error) {
+	req, err := http.ReadRequest(br)
+	if err != nil {
+		return viewerRequest{}, "", err
+	}
+	req.Body.Close()
+
+	channelID, ok := parseChannelIDPath(req.URL.Path, prefix)
+	if !ok {
+		return viewerRequest{}, statusBadRequest, nil
+	}
+	tip, ok := parseTip(req.URL.Query().Get("tip"))
+	if !ok {
+		return viewerRequest{}, statusBadRequest, nil
+	}
+	return viewerRequest{channelID: channelID, tip: tip, host: req.Host}, "", nil
+}
+
+// parseChannelIDPath extracts the channel ID from a URL path of the form
+// prefix + 32 hex digits, optionally followed by "." and an extension
+// (PeerCastStation 互換: "/stream/<id>.flv" のような拡張子付きを許す)。
+func parseChannelIDPath(path, prefix string) (pcp.GnuID, bool) {
+	if !strings.HasPrefix(path, prefix) {
+		return pcp.GnuID{}, false
+	}
+	rest := path[len(prefix):]
+	if len(rest) < 32 {
+		return pcp.GnuID{}, false
+	}
+	if ext := rest[32:]; ext != "" {
+		if ext[0] != '.' || len(ext) == 1 || strings.ContainsAny(ext[1:], "/.") {
+			return pcp.GnuID{}, false
+		}
+	}
+	b, err := hex.DecodeString(rest[:32])
+	if err != nil || len(b) != 16 {
+		return pcp.GnuID{}, false
+	}
+	var id pcp.GnuID
+	copy(id[:], b)
+	return id, true
+}
+
+// parseTip validates a tip query parameter. An empty tip is allowed and
+// returned as ""; otherwise the value must be "host:port" with a non-empty
+// host and a port in 1..65535. The tip is external input that ends up in a
+// net.Dial, so nothing else is accepted.
+func parseTip(tip string) (string, bool) {
+	if tip == "" {
+		return "", true
+	}
+	host, portStr, err := net.SplitHostPort(tip)
+	if err != nil || host == "" {
+		return "", false
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return "", false
+	}
+	return tip, true
+}
+
+// lookupChannel returns the channel for channelID, starting an on-demand
+// relay through OnDemandRelay when it is not registered. Creation and
+// registration happen once inside OnDemandRelay (Manager.StartRelay), so
+// concurrent requests for the same channel share one relay.
+func (l *Listener) lookupChannel(channelID pcp.GnuID, tip string, remote net.Addr) (*channel.Channel, bool) {
+	if ch, ok := l.mgr.GetByID(channelID); ok {
+		return ch, true
+	}
+	if l.OnDemandRelay == nil {
+		return nil, false
+	}
+	ch, err := l.OnDemandRelay(channelID, tip)
+	if err != nil {
+		slog.Warn("servent: auto-relay failed", "remote", remote, "id", hex.EncodeToString(channelID[:]), "tip", tip, "err", err)
+		return nil, false
+	}
+	return ch, ch != nil
+}
+
+func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader) {
 	defer cc.Close()
 
-	req, err := http.ReadRequest(br)
+	vr, status, err := parseViewerRequest(br, "/pls/")
 	if err != nil {
 		return
 	}
-	defer req.Body.Close()
-
-	const prefix = "/pls/"
-	path := req.URL.Path
-	if len(path) < len(prefix)+32 {
-		io.WriteString(cc, "HTTP/1.0 400 Bad Request\r\n\r\n")
+	if status != "" {
+		io.WriteString(cc, status)
 		return
 	}
-	b, err := hex.DecodeString(path[len(prefix) : len(prefix)+32])
-	if err != nil || len(b) != 16 {
-		io.WriteString(cc, "HTTP/1.0 400 Bad Request\r\n\r\n")
-		return
-	}
-	var channelID pcp.GnuID
-	copy(channelID[:], b)
 
-	ch, ok := l.mgr.GetByID(channelID)
-	if !ok && l.OnDemandRelay != nil {
-		tip := req.URL.Query().Get("tip")
-		if relayErr := l.OnDemandRelay(channelID, tip); relayErr != nil {
-			slog.Warn("pls: auto-relay failed", "remote", cc.RemoteAddr(), "tip", tip, "err", relayErr)
-		} else {
-			ch, ok = l.mgr.GetByID(channelID)
-		}
-	}
+	ch, ok := l.lookupChannel(vr.channelID, vr.tip, cc.RemoteAddr())
 	if !ok {
-		slog.Info("pls: channel not found", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
-		io.WriteString(cc, "HTTP/1.0 404 Not Found\r\n\r\n")
+		slog.Info("pls: channel not found", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(vr.channelID[:]))
+		io.WriteString(cc, statusNotFound)
 		return
 	}
 
 	// クライアントがアクセスに使ったホスト名/ポートをそのまま流用する。
 	// localhost 固定だと LAN 越し視聴や WSL mirrored 環境で繋がらないため。
-	host := req.Host
+	host := vr.host
 	if host == "" {
 		host = fmt.Sprintf("localhost:%d", l.port)
 	}
-	streamURL := fmt.Sprintf("http://%s/stream/%s", host, hex.EncodeToString(channelID[:]))
+	streamURL := fmt.Sprintf("http://%s/stream/%s", host, hex.EncodeToString(vr.channelID[:]))
 	name := ch.Info().Name
 	if name == "" {
-		name = hex.EncodeToString(channelID[:])
+		name = hex.EncodeToString(vr.channelID[:])
 	}
 	body := fmt.Sprintf("#EXTM3U\n#EXTINF:-1,%s\n%s\n", name, streamURL)
 
@@ -255,22 +340,30 @@ func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader, _ []byte) {
 	slog.Info("pls: sent playlist", "remote", cc.RemoteAddr(), "channel", name)
 }
 
-func (l *Listener) handleHTTPStream(cc *countingConn, br *bufio.Reader, peek []byte) {
-	channelID, ok := parseChannelIDFromPath(peek, "/stream/")
-	if !ok {
-		slog.Warn("http: bad stream path", "remote", cc.RemoteAddr())
+func (l *Listener) handleHTTPStream(cc *countingConn, br *bufio.Reader) {
+	vr, status, err := parseViewerRequest(br, "/stream/")
+	if err != nil {
+		slog.Debug("http: read request error", "remote", cc.RemoteAddr(), "err", err)
 		cc.Close()
 		return
 	}
-	ch, ok := l.mgr.GetByID(channelID)
+	if status != "" {
+		slog.Warn("http: bad stream request", "remote", cc.RemoteAddr())
+		io.WriteString(cc, status)
+		cc.Close()
+		return
+	}
+	ch, ok := l.lookupChannel(vr.channelID, vr.tip, cc.RemoteAddr())
 	if !ok {
-		slog.Info("http: channel not found", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
+		slog.Info("http: channel not found", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(vr.channelID[:]))
+		io.WriteString(cc, statusNotFound)
 		cc.Close()
 		return
 	}
 	id := int(l.nextConnID.Add(1))
-	h := newHTTPOutputStream(cc, br, ch, id)
+	h := newHTTPOutputStream(cc, ch, id)
 	if !l.tryAdmit(ch, h) {
+		io.WriteString(cc, statusServiceUnavailable)
 		cc.Close()
 		return
 	}

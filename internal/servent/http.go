@@ -1,11 +1,9 @@
 package servent
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"strings"
 	"time"
 
@@ -16,17 +14,22 @@ const (
 	directWriteTimeout = 60 * time.Second
 )
 
+// firstDataTimeout bounds how long a viewer waits for the first packet after
+// the response headers have been sent (e.g. while an on-demand relay is
+// being established). A variable so tests can shorten it.
+var firstDataTimeout = 30 * time.Second
+
 // HTTPOutputStream sends raw FLV data to a media player over HTTP.
+// The HTTP request has already been consumed by the Listener; run only
+// writes.
 type HTTPOutputStream struct {
 	outputBase
-	br *bufio.Reader
 	ch *channel.Channel
 }
 
-func newHTTPOutputStream(conn *countingConn, br *bufio.Reader, ch *channel.Channel, id int) *HTTPOutputStream {
+func newHTTPOutputStream(conn *countingConn, ch *channel.Channel, id int) *HTTPOutputStream {
 	return &HTTPOutputStream{
 		outputBase: newOutputBase(conn, id),
-		br:         br,
 		ch:         ch,
 	}
 }
@@ -37,14 +40,6 @@ func (o *HTTPOutputStream) Type() channel.OutputStreamType { return channel.Outp
 func (o *HTTPOutputStream) run() {
 	defer slog.Info("http: viewer disconnected", "remote", o.remoteAddr, "id", o.id)
 	defer o.conn.Close()
-
-	req, err := http.ReadRequest(o.br)
-	if err != nil {
-		slog.Debug("http: read request error", "remote", o.remoteAddr, "id", o.id, "err", err)
-		return
-	}
-	slog.Debug("http: request received", "remote", o.remoteAddr, "id", o.id, "path", req.URL.Path)
-	_ = req.Body.Close()
 
 	// Monitor the read side so we detect viewer disconnect even when no
 	// new stream data is arriving (and thus no writes are attempted).

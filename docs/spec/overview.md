@@ -67,8 +67,9 @@ Go 製 PeerCast ノードの実装仕様。ブロードキャストノード（R
 └──────┬─────────────┘                     └──────────────────────┘
        │
        ├─ GET /channel/<id> → PCPOutputStream  × N  (下流リレーノード)
-       ├─ GET /stream/<id>  → HTTPOutputStream × N  (視聴プレイヤー)
-       ├─ GET /pls/<id>     → M3U プレイリスト (未登録ならオンデマンドリレー開始。?tip= がなければ YP に tracker を問い合わせる)
+       ├─ GET /stream/<id>  → HTTPOutputStream × N  (視聴プレイヤー。未登録ならオンデマンドリレー開始)
+       ├─ GET /pls/<id>     → M3U プレイリスト (未登録ならオンデマンドリレー開始)
+       │                       どちらも ?tip=host:port で接続先を指定でき、なければ YP に tracker を問い合わせる
        ├─ pcp\n             → handlePing() (YP ファイアウォール疎通確認)
        └─ POST /api/1       → JSON-RPC API (internal/jsonrpc)
 ```
@@ -136,7 +137,7 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 5. Listener を起動 (ポート 7144 待ち受け)
 6. YPClient を起動 (COUT 接続・bcst ループ開始) ← YP が設定されている場合のみ
    ↳ oleh で得た globalIP を Listener と Manager (→ 全 RelayClient) に伝播する (OnGlobalIP)
-7. Listener にオンデマンドリレー (`/pls/<id>[?tip=host:port]`) のフック (→ tip がなければ relay.FindTracker で全 `[[yp]]` に問い合わせ → Manager.StartRelay) を登録
+7. Listener にオンデマンドリレー (`/pls/<id>[?tip=host:port]`, `/stream/<id>[.ext][?tip=host:port]`) のフック (→ tip がなければ relay.FindTracker で全 `[[yp]]` に問い合わせ → Manager.StartRelay) を登録
 8. JSON-RPC API ハンドラーを Listener に登録
 9. Cleaner を起動 (channel_cleanup_minutes > 0 の場合)
 10. RTMP サーバーを起動 (ポート 1935 待ち受け)
@@ -162,8 +163,8 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 ### 4.3 リレーチャンネル開始フロー (オンデマンド)
 
 ```
-1. プレイヤーが /pls/<channelId>[?tip=<host:port>] にアクセス
-   (/stream/ や /channel/ への直接アクセスでは自動リレーは開始せず 404 を返す)
+1. プレイヤーが /pls/<channelId>[?tip=<host:port>] または /stream/<channelId>[.flv][?tip=<host:port>] にアクセス
+   (/channel/ (PCP) への直接アクセスでは自動リレーは開始せず 404 を返す)
 2. Listener がチャンネル未登録を検出し、OnDemandRelay フック → Manager.StartRelay() を呼ぶ
    ↳ tip がなければ先に relay.FindTracker() で config の全 [[yp]] に順に問い合わせ、tracker の host:port を得る
      (-yp で選んだ YP に限らない)。どの YP も知らなければ 404
@@ -179,6 +180,8 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 9. 上流からの pkt アトムを Channel.ContentBuffer に継続的に書き込む
 10. YPClient は globalIP 未取得なら一度 YP に接続して oleh から取得し、切断する
     (リレーチャンネルは YP に bcst しない)
+11. /stream/ の場合は同じ HTTP 接続でそのまま視聴を開始する (HTTPOutputStream が初回データを最大 30 秒待つ)。
+    /pls/ の場合はプレイリストを返し、プレイヤーが改めて /stream/ を開く
 ```
 
 > 再接続は PeerCastStation と同じ方式 (バックオフなし): 上流から受け取った HOST アトムを

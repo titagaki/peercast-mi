@@ -167,6 +167,12 @@ PeerCastStation はシャットダウン等で下流ノードを切断する際�
 
 ## HTTP 出力ストリーム (HTTPOutputStream)
 
+### `/stream/` でのリレー開始と URL 形式
+
+PeerCastStation は `/pls/` と `/stream/` のどちらも `RequestChannel(channelId, tip, request_relay: true)` を通し、未登録チャンネルなら tip (なければ YP の FindTracker) からリレーを開始する。パスは `<32 hex>[.<ext>]` (`ChannelIdPattern`) で、`.flv` などの拡張子を許す。peercast-mi は当初 `/pls/` だけがリレーを開始し、`/stream/` は未登録なら切断していたが、両者を同じ解析・解決処理に揃えた ([0014](0014-stream-on-demand-relay.md))。tip なしの扱いも同じ (YP に問い合わせ)。ヘッダー送信前にデータ到着を待つか (PeerCastStation は 10 秒待って 504) は合わせていない。
+
+- 参照: `HTTPOutputStream.cs` `ParsedRequest.ChannelIdPattern`、`GetChannelAsync` → `RequestChannel(..., request_relay: true)`、`PeerCast.cs` `RequestChannel`
+
 ### ヘッダー変更時の挙動
 
 PeerCastStation は HTTP ストリームでヘッダーが変更されると新しいヘッダーを送信してストリームを継続する。`HTTPOutputStream.run` で `headerCh` 受信時に新ヘッダーを書き込み、`sent` と `waitingForKeyframe` をリセットしてそのまま配信継続するよう変更済み。データパケット送信の直前にも非ブロッキングで `headerCh` を確認し、`SetHeader`+`Write` の競合で新ボディが旧ヘッダーのまま送出される事を防ぐ。

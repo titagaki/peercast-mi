@@ -14,6 +14,8 @@
 
 ### 機能
 
+- [ ] オンデマンドリレーの接続先 (`tip`) と同時リレーチャンネル数に制限を設けるか判断する — `/pls/` `/stream/` への GET だけで任意の host:port へ PCP 接続を開始できる ([decisions/0014](decisions/0014-stream-on-demand-relay.md))
+- [ ] HTTP 直接視聴で 200 を先に返す方式のままで良いか (PeerCastStation はデータ到着を待ってから 200 / 504) — [decisions/0014](decisions/0014-stream-on-demand-relay.md)。リレー直後は `icy-name` が空、`Content-Type` が既定値になる問題も同根
 - [ ] HTTP 直接視聴の ICY メタデータ (`icy-metaint`) — [spec/components.md 4.9](spec/components.md)
 - [ ] push (GIV) 接続の対応範囲を再検討するかどうか — 現状は対象外 ([decisions/0003](decisions/0003-no-push-connection.md))
 
@@ -32,6 +34,7 @@
 
 ## 完了
 
+- [x] 2026-09-14 `/stream/<id>[.flv]?tip=` での自動リレー開始 (peca-live 互換) と、リレー初回ヘッダーの二重送信バグ修正 — [decisions/0014](decisions/0014-stream-on-demand-relay.md)
 - [x] 2026-09-13 `bumpChannel` の名前指定 params 対応 (peca-live 互換) — [decisions/0010](decisions/0010-bump-channel-named-params.md)
 - [x] 2026-09-13 エンコーダーが `broadcastChannel` より先に接続すると FLV ヘッダーが載らないバグ — `internal/rtmp/server.go` (`headerAppliedTo`)
 - [x] 2026-09-13 JSON-RPC の CORS ワイルドカード廃止 — [decisions/0011](decisions/0011-cors-policy.md)

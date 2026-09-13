@@ -540,11 +540,41 @@ bcst
 | 先頭バイト列 | 処理 |
 |:---|:---|
 | `"GET /channel/"` | PCPOutputStream を生成 (admission 判定 → handshake → streaming) |
-| `"GET /stream/"` | HTTPOutputStream を生成 |
-| `"GET /pls/"` | M3U プレイリストを返す。チャンネル未登録なら `OnDemandRelay(channelID, tip)` でリレーを開始 (`?tip=host:port` がなければ tip は空文字列で、tracker 探索は実装側 = `relay.FindTracker` に委ねる) |
+| `"GET /stream/"` | 視聴要求 (下記) を解析し、HTTPOutputStream を生成 |
+| `"GET /pls/"` | 視聴要求 (下記) を解析し、M3U プレイリストを返す |
 | `"pcp\n"` (0x70 0x63 0x70 0x0a) | `handlePing()` — YP ファイアウォール疎通確認 |
 | `"POST /api"` / `"OPTIONS /api"` | JSON-RPC API ハンドラーへ転送 (OPTIONS は CORS preflight) |
 | その他 | 不明プロトコル → 切断 |
+
+### 視聴要求 (`/pls/`, `/stream/`)
+
+両ハンドラーは `parseViewerRequest` で HTTP リクエストを 1 回だけ読み、同じ規則で解析する (HTTPOutputStream はリクエストを読まない)。
+
+```
+パス:    <prefix><32 桁 hex の channelId>[.<拡張子>]
+         例: /stream/<id>、/stream/<id>.flv、/pls/<id>
+         拡張子は "." の後に "/" と "." を含まない 1 文字以上。それ以外の余分なパス → 400
+クエリ:  ?tip=host:port  (省略可)
+         net.SplitHostPort で分解でき、host が空でなく、port が 1..65535 なら受理。それ以外 → 400
+         tip はそのまま relay client の接続先 (net.Dial) になる外部入力なので、登録済みチャンネルへの要求でも形式検証する
+
+チャンネル解決 (lookupChannel):
+  1. Manager.GetByID にあればそれを使う (tip は無視。既存の接続先は変えず、リレーも作り直さない)
+  2. なければ OnDemandRelay(channelID, tip) を呼ぶ (main.go → tip が空なら relay.FindTracker で YP に問い合わせ → Manager.StartRelay)
+     生成と登録は Manager.StartRelay のロック下で 1 回だけ行われるので、同時要求でリレーは重複しない
+     OnDemandRelay 未設定または失敗 (tracker 不明、接続先未指定で YP も知らない等) → 404
+```
+
+レスポンスは body を書き始める前に決まる HTTP/1.0 のステータス行のみ:
+
+| 状況 | `/pls/` | `/stream/` |
+|:---|:---|:---|
+| パス・tip の形式不正 | 400 | 400 |
+| チャンネル未登録でリレーを開始できない | 404 | 404 |
+| `tryAdmit` 失敗 (視聴数・帯域上限) | — | 503 |
+| 成功 | 200 + M3U | 200 + ストリーム (4.9) |
+
+`/stream/` は自動リレー開始後もリダイレクトせず、同じ接続で 4.9 のフローに入る (リレー確立待ちは 4.9 の初回データ待機がそのまま担う)。
 
 ### 接続数制限 (admission)
 
@@ -667,8 +697,9 @@ chan
 ### フロー
 
 ```
-1. HTTP GET /stream/<channel-id> を受け取る
-   (Listener 側で tryAdmit に失敗した場合はレスポンスなしで切断)
+1. Listener が HTTP GET /stream/<channel-id>[.ext][?tip=host:port] を解析し (4.7 視聴要求)、
+   チャンネルを解決 (未登録なら自動リレー開始) して tryAdmit したうえで run() に入る
+   (失敗時は Listener が 400/404/503 を返す)
 
 2. 読み取り監視 goroutine を起動 (プレイヤー切断をデータ送信がない間も検知する)
 
@@ -682,9 +713,11 @@ chan
    ※ sanitizeHeaderValue() で CR/LF を除去し HTTP ヘッダーインジェクションを防止
 
 4. Channel.HasData() を確認
-   データなし → Signal() で最大 30 秒待機、タイムアウトなら終了
+   データなし → Signal() で最大 30 秒 (firstDataTimeout) 待機、タイムアウトなら切断
+   (200 送信済みなので別のエラーは書かない。リレーチャンネルは残り、視聴者ゼロなら Cleaner が後で削除する)
 
 5. Channel.Header() を送信
+   (待機中に届いた headerCh の通知はこの送信で消化済みなので捨てる。捨てないとヘッダーが 2 回送られる)
 
 6. キーフレームを起点にストリームデータを連続送信
    - Channel.PacketsAfter(sent) で最後に送った Content より新しいものだけを取る

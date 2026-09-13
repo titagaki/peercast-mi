@@ -26,4 +26,5 @@
 | [0011](0011-cors-policy.md) | JSON-RPC の CORS はループバック + 許可リストのみ | 採用 |
 | [0012](0012-relay-lifecycle-in-manager.md) | オンデマンドリレーの組み立ては Manager.StartRelay に置く | 採用 |
 | [0013](0013-docs-follow-code.md) | 仕様書と実装が食い違ったら仕様書を実装に合わせる | 採用 |
+| [0014](0014-stream-on-demand-relay.md) | `/stream/` も `/pls/` と同じ規則でオンデマンドリレーを開始する | 採用 |
 | [peercaststation-compat](peercaststation-compat.md) | PeerCastStation との挙動合わせ (複数項目) | 採用 |
