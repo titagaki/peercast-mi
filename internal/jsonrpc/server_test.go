@@ -415,6 +415,103 @@ func TestBumpChannel_NoYP(t *testing.T) {
 	assertResult(t, resp)
 }
 
+// countingBumper records how many times Bump() was called.
+type countingBumper struct {
+	calls int
+}
+
+func (b *countingBumper) Bump() { b.calls++ }
+
+// recordingManager wraps a ChannelManager and records the IDs passed to GetByID.
+type recordingManager struct {
+	ChannelManager
+	lookups []pcp.GnuID
+}
+
+func (m *recordingManager) GetByID(id pcp.GnuID) (*channel.Channel, bool) {
+	m.lookups = append(m.lookups, id)
+	return m.ChannelManager.GetByID(id)
+}
+
+func TestBumpChannel_PositionalParams(t *testing.T) {
+	s, _, chID := newTestServer(t)
+	yp := &countingBumper{}
+	s.ypClient = yp
+	resp := rpcCall(t, s, "bumpChannel", []interface{}{chanIDHex(chID)})
+	if r := assertResult(t, resp); r != nil {
+		t.Fatalf("expected null result, got %v", r)
+	}
+	if yp.calls != 1 {
+		t.Fatalf("expected 1 Bump call, got %d", yp.calls)
+	}
+}
+
+func TestBumpChannel_NamedParams(t *testing.T) {
+	s, _, chID := newTestServer(t)
+	yp := &countingBumper{}
+	s.ypClient = yp
+	resp := rpcCall(t, s, "bumpChannel", map[string]interface{}{"channelId": chanIDHex(chID)})
+	if r := assertResult(t, resp); r != nil {
+		t.Fatalf("expected null result, got %v", r)
+	}
+	if yp.calls != 1 {
+		t.Fatalf("expected 1 Bump call, got %d", yp.calls)
+	}
+}
+
+func TestBumpChannel_BothFormsTargetSameChannel(t *testing.T) {
+	s, _, chID := newTestServer(t)
+	rec := &recordingManager{ChannelManager: s.mgr}
+	s.mgr = rec
+
+	assertResult(t, rpcCall(t, s, "bumpChannel", []interface{}{chanIDHex(chID)}))
+	assertResult(t, rpcCall(t, s, "bumpChannel", map[string]interface{}{"channelId": chanIDHex(chID)}))
+
+	if len(rec.lookups) != 2 {
+		t.Fatalf("expected 2 channel lookups, got %d", len(rec.lookups))
+	}
+	if rec.lookups[0] != chID || rec.lookups[1] != chID {
+		t.Fatalf("expected both lookups to target %s, got %s and %s",
+			chanIDHex(chID), chanIDHex(rec.lookups[0]), chanIDHex(rec.lookups[1]))
+	}
+}
+
+func TestBumpChannel_NamedParams_MissingChannelID(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	yp := &countingBumper{}
+	s.ypClient = yp
+	resp := rpcCall(t, s, "bumpChannel", map[string]interface{}{})
+	assertError(t, resp, errCodeInvalidParams)
+	if yp.calls != 0 {
+		t.Fatalf("expected no Bump call, got %d", yp.calls)
+	}
+}
+
+func TestBumpChannel_NamedParams_NonStringChannelID(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	yp := &countingBumper{}
+	s.ypClient = yp
+	for _, v := range []interface{}{12345, true, []string{"x"}, map[string]string{"a": "b"}, nil} {
+		resp := rpcCall(t, s, "bumpChannel", map[string]interface{}{"channelId": v})
+		assertError(t, resp, errCodeInvalidParams)
+	}
+	if yp.calls != 0 {
+		t.Fatalf("expected no Bump call, got %d", yp.calls)
+	}
+}
+
+func TestBumpChannel_UnknownChannelID(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	yp := &countingBumper{}
+	s.ypClient = yp
+	unknown := strings.Repeat("00", 16)
+	assertError(t, rpcCall(t, s, "bumpChannel", []interface{}{unknown}), errCodeInternal)
+	assertError(t, rpcCall(t, s, "bumpChannel", map[string]interface{}{"channelId": unknown}), errCodeInternal)
+	if yp.calls != 0 {
+		t.Fatalf("expected no Bump call, got %d", yp.calls)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // getChannelConnections
 // ---------------------------------------------------------------------------

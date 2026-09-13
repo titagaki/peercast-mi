@@ -179,7 +179,7 @@ func (s *Server) dispatch(method string, params json.RawMessage) (interface{}, *
 	case "stopChannel":
 		return s.withChannel(params, s.stopChannel)
 	case "bumpChannel":
-		return s.withChannel(params, s.bumpChannel)
+		return s.bumpChannelWithParams(params)
 	case "getChannelConnections":
 		return s.withChannel(params, s.getChannelConnections)
 	case "stopChannelConnection":
@@ -188,7 +188,7 @@ func (s *Server) dispatch(method string, params json.RawMessage) (interface{}, *
 		return s.getYellowPages()
 	case "getChannelRelayTree":
 		return s.withChannel(params, s.getChannelRelayTree)
-default:
+	default:
 		return nil, &rpcError{Code: errCodeMethodNotFound, Message: fmt.Sprintf("method not found: %s", method)}
 	}
 }

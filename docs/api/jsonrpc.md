@@ -16,7 +16,8 @@ POST /api/1
 
 ### リクエスト形式
 
-JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (`"params": [...]`) のみ対応。
+JSON-RPC 2.0 仕様に準拠する。パラメータは原則として **位置指定配列** (`"params": [...]`) のみ対応。
+例外として `bumpChannel` は名前指定オブジェクト (`"params": {"channelId": ...}`) も受け付ける（PeerCastStation / peca-live 互換のため）。
 
 ```json
 {
@@ -65,7 +66,7 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは **位置指定配列** (
 | `getChannelStatus` | `[channelId]` | status オブジェクト |
 | `setChannelInfo` | `[channelId, info, track]` | `null` |
 | `stopChannel` | `[channelId]` | `null` |
-| `bumpChannel` | `[channelId]` | `null` |
+| `bumpChannel` | `[channelId]` または `{channelId}` | `null` |
 | `getChannelConnections` | `[channelId]` | 接続情報の配列 |
 | `stopChannelConnection` | `[channelId, connectionId]` | `boolean` |
 | `getYellowPages` | なし | YP オブジェクトの配列 |
@@ -328,11 +329,27 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 
 ### `bumpChannel`
 
-**パラメータ:** `[channelId: string]`
+**パラメータ:** 次のどちらの形式でも指定できる。
 
+- 位置指定配列: `[channelId: string]`
+- 名前指定オブジェクト: `{ "channelId": string }` （PeerCastStation 互換。peca-live はこの形式を使用する）
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "bumpChannel", "params": ["0123456789abcdef0123456789abcdef"] }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "bumpChannel", "params": { "channelId": "0123456789abcdef0123456789abcdef" } }
+```
+
+どちらの形式でも同じチャンネルが対象となり、処理内容は同一。
 YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場合は no-op。
 
 **返却値:** `null`
+
+**エラー条件:**
+- `channelId` が指定されていない、または文字列以外 → `-32602`
+- 該当チャンネルが存在しない → `-32603`
 
 ---
 

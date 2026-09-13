@@ -1,6 +1,7 @@
 package jsonrpc
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -213,7 +214,6 @@ func (s *Server) broadcastChannel(params json.RawMessage) (interface{}, *rpcErro
 	return map[string]string{"channelId": gnuIDString(ch.ID)}, nil
 }
 
-
 func (s *Server) getChannels() (interface{}, *rpcError) {
 	type chanEntry struct {
 		ChannelID string           `json:"channelId"`
@@ -295,6 +295,30 @@ func (s *Server) setChannelInfo(params json.RawMessage) (interface{}, *rpcError)
 func (s *Server) stopChannel(ch *channel.Channel) (interface{}, *rpcError) {
 	s.mgr.Stop(ch.ID)
 	return nil, nil
+}
+
+// bumpChannelWithParams dispatches bumpChannel. In addition to the positional
+// form ([channelId]) used by every other method, it accepts the named form
+// ({"channelId": ...}) that PeerCastStation supports and peca-live sends.
+func (s *Server) bumpChannelWithParams(params json.RawMessage) (interface{}, *rpcError) {
+	if !bytes.HasPrefix(bytes.TrimSpace(params), []byte("{")) {
+		return s.withChannel(params, s.bumpChannel)
+	}
+	var named struct {
+		ChannelID json.RawMessage `json:"channelId"`
+	}
+	if err := json.Unmarshal(params, &named); err != nil || len(named.ChannelID) == 0 || string(named.ChannelID) == "null" {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "channelId required"}
+	}
+	var chanIDStr string
+	if err := json.Unmarshal(named.ChannelID, &chanIDStr); err != nil {
+		return nil, &rpcError{Code: errCodeInvalidParams, Message: "invalid channelId"}
+	}
+	ch, ok := s.lookupChannel(chanIDStr)
+	if !ok {
+		return nil, &rpcError{Code: errCodeInternal, Message: "channel not found"}
+	}
+	return s.bumpChannel(ch)
 }
 
 func (s *Server) bumpChannel(_ *channel.Channel) (interface{}, *rpcError) {
