@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
@@ -52,9 +53,20 @@ func New(sessionID pcp.GnuID, mgr ChannelManager, cfg *config.Config, ypClient Y
 // Handler returns an http.Handler for POST /api/1.
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		// Cross-origin requests from a browser carry an Origin header. Only
+		// loopback origins and explicitly configured ones are allowed; anything
+		// else is rejected outright so that an arbitrary web page cannot drive
+		// the (unauthenticated) localhost API through the user's browser.
+		if origin := r.Header.Get("Origin"); origin != "" {
+			if !s.isAllowedOrigin(origin) {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Add("Vary", "Origin")
+		}
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -95,6 +107,27 @@ func (s *Server) Handler() http.Handler {
 		}
 		json.NewEncoder(w).Encode(resp)
 	})
+}
+
+// isAllowedOrigin reports whether a CORS request from origin may use the API.
+// Loopback origins (any port) are always allowed so the bundled Web UI works
+// from a local dev server; other origins must be listed in cfg.AllowedOrigins.
+func (s *Server) isAllowedOrigin(origin string) bool {
+	for _, allowed := range s.cfg.AllowedOrigins {
+		if allowed == origin {
+			return true
+		}
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // checkBasicAuth returns true if the request carries valid Basic auth credentials

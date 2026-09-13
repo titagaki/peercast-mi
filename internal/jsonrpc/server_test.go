@@ -746,3 +746,82 @@ func TestNonLocalhostUnauthorized(t *testing.T) {
 		t.Fatalf("expected 401 for non-localhost, got %d", w.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// CORS
+// ---------------------------------------------------------------------------
+
+func postWithOrigin(t *testing.T, s *Server, method, origin string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := `{"jsonrpc":"2.0","method":"getVersionInfo","params":[],"id":1}`
+	req := httptest.NewRequest(method, "/api/1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", origin)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	return w
+}
+
+func TestCORS_NoOriginHeader_NoCORSHeaders(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	w := post(t, s, `{"jsonrpc":"2.0","method":"getVersionInfo","params":[],"id":1}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if v := w.Header().Get("Access-Control-Allow-Origin"); v != "" {
+		t.Fatalf("expected no ACAO header without Origin, got %q", v)
+	}
+}
+
+func TestCORS_LoopbackOriginAllowed(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	for _, origin := range []string{"http://localhost:5173", "http://127.0.0.1:8080", "http://[::1]:3000"} {
+		for _, method := range []string{http.MethodOptions, http.MethodPost} {
+			w := postWithOrigin(t, s, method, origin)
+			if w.Code == http.StatusForbidden {
+				t.Fatalf("%s %s: expected loopback origin to be allowed, got 403", method, origin)
+			}
+			if got := w.Header().Get("Access-Control-Allow-Origin"); got != origin {
+				t.Fatalf("%s %s: ACAO = %q, want %q", method, origin, got, origin)
+			}
+		}
+	}
+}
+
+func TestCORS_ForeignOriginRejected(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	for _, method := range []string{http.MethodOptions, http.MethodPost} {
+		w := postWithOrigin(t, s, method, "https://evil.example.com")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("%s: expected 403 for foreign origin, got %d", method, w.Code)
+		}
+		if v := w.Header().Get("Access-Control-Allow-Origin"); v != "" {
+			t.Fatalf("%s: expected no ACAO header, got %q", method, v)
+		}
+	}
+}
+
+func TestCORS_ConfiguredOriginAllowed(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	s.cfg.AllowedOrigins = []string{"https://ui.example.com"}
+	w := postWithOrigin(t, s, http.MethodPost, "https://ui.example.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for configured origin, got %d", w.Code)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://ui.example.com" {
+		t.Fatalf("ACAO = %q", got)
+	}
+	// Still rejects others.
+	if w := postWithOrigin(t, s, http.MethodPost, "https://other.example.com"); w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for unlisted origin, got %d", w.Code)
+	}
+}
+
+func TestCORS_NeverWildcard(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	w := postWithOrigin(t, s, http.MethodOptions, "http://localhost:5173")
+	if w.Header().Get("Access-Control-Allow-Origin") == "*" {
+		t.Fatal("ACAO must never be a wildcard")
+	}
+}

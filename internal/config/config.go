@@ -60,7 +60,11 @@ type Config struct {
 	// Basic 認証の資格情報。どちらか空の場合は非 localhost を拒否する。
 	AdminUser string `toml:"admin_user"`
 	AdminPass string `toml:"admin_pass"`
-	YPs       []YP   `toml:"yp"`
+	// AllowedOrigins は JSON-RPC への CORS 要求を許可するオリジンの一覧
+	// (例: "https://ui.example.com")。ループバック (localhost / 127.0.0.1 / [::1])
+	// のオリジンは常に許可される。それ以外のオリジンからの要求は 403 で拒否する。
+	AllowedOrigins []string `toml:"allowed_origins"`
+	YPs            []YP     `toml:"yp"`
 }
 
 func defaults() Config {
