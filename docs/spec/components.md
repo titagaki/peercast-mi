@@ -345,6 +345,28 @@ func (c *Channel) Broadcast(from OutputStream, atom *pcp.Atom) // BcstForwarder 
 
 上流 PeerCast ノードへ PCP でストリームを受信し、Channel に書き込む。
 
+### tracker の探索 (FindTracker)
+
+`/pls/` に tip がないとき、`relay.FindTracker(ctx, ypAddrs, channelID, sessionID, ourGlobalIP)` が YP に tracker を問い合わせる (PeerCastStation 互換: `PCPYellowPageClient.FindTracker`)。
+
+```
+FindTracker():
+  ypAddrs (config の全 [[yp]]) を順に試し、最初に見つかった tracker の host:port を返す。全滅なら ErrTrackerNotFound
+  YP 1 件あたり 10 秒 (findTrackerTimeout) で打ち切る
+
+findTrackerAt(yp):
+  1. YP に TCP 接続し、リレー要求と同じ GET /channel/<id> (x-peercast-pcp: 1) + helo を送る
+  2. HTTP ステータスで分岐
+     - 503: YP はリレーしないので、そのチャンネルについて知っている host アトム (tracker の bcst 由来) を oleh の後に送ってくる。
+            quit まで読み、cid が一致し Tracker フラグの立った最初の host を採用する。
+            接続先アドレスは selectSourceHost と同じ規則 (同一 NAT なら LocalAddr、それ以外は GlobalAddr)
+     - 200: YP 自身がリレー可能なので YP を tracker とみなす
+     - その他: 失敗
+  3. quit を送って切断
+```
+
+見つかった tracker で `Manager.StartRelay` を呼ぶ。YP が返す他の host は初期候補として使わない (通常 tracker 自身の bcst しか YP に届いていないため。tracker 接続後の 503 応答や bcst で候補を学習する)。
+
 ### 接続フロー
 
 `Run()` が接続先選択と再接続ループを回し、`connectTo()` が 1 接続分の TCP 接続〜切断を担当する。
@@ -519,7 +541,7 @@ bcst
 |:---|:---|
 | `"GET /channel/"` | PCPOutputStream を生成 (admission 判定 → handshake → streaming) |
 | `"GET /stream/"` | HTTPOutputStream を生成 |
-| `"GET /pls/"` | M3U プレイリストを返す。チャンネル未登録で `?tip=host:port` があれば `OnDemandRelay` でリレーを開始 |
+| `"GET /pls/"` | M3U プレイリストを返す。チャンネル未登録なら `OnDemandRelay(channelID, tip)` でリレーを開始 (`?tip=host:port` がなければ tip は空文字列で、tracker 探索は実装側 = `relay.FindTracker` に委ねる) |
 | `"pcp\n"` (0x70 0x63 0x70 0x0a) | `handlePing()` — YP ファイアウォール疎通確認 |
 | `"POST /api"` / `"OPTIONS /api"` | JSON-RPC API ハンドラーへ転送 (OPTIONS は CORS preflight) |
 | その他 | 不明プロトコル → 切断 |

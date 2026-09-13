@@ -32,7 +32,7 @@ go build -o peercast-mi .
 
 | フラグ | デフォルト | 説明 |
 |---|---|---|
-| `-yp` | config.toml の先頭エントリ | 使用する YP 名 |
+| `-yp` | config.toml の先頭エントリ | 配信の掲載先にする YP 名 (視聴時の tracker 探索は全 `[[yp]]` に問い合わせる) |
 | `-config` | `config.toml` | 設定ファイルのパス |
 
 ### config.toml

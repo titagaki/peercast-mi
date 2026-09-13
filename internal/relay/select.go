@@ -4,14 +4,29 @@ import (
 	"math/rand/v2"
 )
 
-// selectSourceHost picks the best connectable host from the source node list,
-// using PeerCastStation's scoring algorithm.
-//
-// ourGlobalIP is our own external IPv4 (learned from the YP oleh); it is used
-// to decide whether a source node is behind the same NAT as us. When it is,
-// the node's LocalAddr is preferred and a site-local scoring bonus is applied,
-// matching PeerCastStation's IsSiteLocal(Host) check
+// sameNAT reports whether the node is behind the same NAT as us: its
+// external IP matches our own learned global IP (ourGlobalIP, from the YP
+// oleh). Matches PeerCastStation's IsSiteLocal(Host) check
 // (PCPSourceStream.cs: compares node.GlobalEndPoint to listener.GlobalEndPoint).
+func (n SourceNode) sameNAT(ourGlobalIP uint32) bool {
+	return ourGlobalIP != 0 && n.GlobalIP != 0 && n.GlobalIP == ourGlobalIP
+}
+
+// connectAddr returns the address to dial the node at: LocalAddr when it is
+// behind the same NAT as us, otherwise GlobalAddr — even if the node reports
+// a LocalAddr (that private IP belongs to a different LAN and would only
+// time out). Returns "" if neither applies.
+func (n SourceNode) connectAddr(ourGlobalIP uint32) string {
+	if n.sameNAT(ourGlobalIP) && n.LocalAddr != "" {
+		return n.LocalAddr
+	}
+	return n.GlobalAddr
+}
+
+// selectSourceHost picks the best connectable host from the source node list,
+// using PeerCastStation's scoring algorithm. ourGlobalIP is used to prefer a
+// node's LocalAddr and apply a site-local scoring bonus when it is behind the
+// same NAT as us (see connectAddr).
 //
 // Returns "" if no host is available.
 func selectSourceHost(nodes []SourceNode, ignored *IgnoredNodeCollection, trackerAddr string, ourGlobalIP uint32) string {
@@ -23,19 +38,8 @@ func selectSourceHost(nodes []SourceNode, ignored *IgnoredNodeCollection, tracke
 			continue
 		}
 
-		// A node is "site-local" (same NAT as us) iff its external IP
-		// matches our own learned global IP. When that holds we should
-		// reach it via its LocalAddr; otherwise we must always go via
-		// GlobalAddr, even if the node reports a LocalAddr (that private
-		// IP belongs to a different LAN and would only time out).
-		sameNAT := ourGlobalIP != 0 && n.GlobalIP != 0 && n.GlobalIP == ourGlobalIP
-
-		var addr string
-		if sameNAT && n.LocalAddr != "" {
-			addr = n.LocalAddr
-		} else {
-			addr = n.GlobalAddr
-		}
+		sameNAT := n.sameNAT(ourGlobalIP)
+		addr := n.connectAddr(ourGlobalIP)
 		if addr == "" {
 			continue
 		}

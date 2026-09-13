@@ -10,6 +10,15 @@ PeerCastStation のソースコードと比較して peercast-mi が合わせて
 
 ## リレークライアント (RelayClient)
 
+### tracker の探索
+
+#### YP への問い合わせ (FindTracker)
+
+PeerCastStation は接続先を指定せずにリレーを開始するとき (`PeerCast.RelayChannel(channel_id)`)、登録済みの YP を順に `FindTracker` で当たる。YP に `GET /channel/<id>` + `x-peercast-pcp:1` を送り、503 なら helo を送って host アトムを quit まで読み、`IsTracker` な host を tracker とする。200 なら YP 自身を tracker とみなす。peercast-mi は当初 `/pls/?tip=` で明示された tracker からしかリレーを開始できなかったが、`relay.FindTracker` を追加し、tip のない `/pls/` では config の全 `[[yp]]` に順に問い合わせるよう変更済み。helo は GET と同時に送る (`Client.handshake` と同じ。peercast-yt は 503 行を書いてから helo を読むので順序は問題にならない)。
+
+- 参照: `PeerCast.cs` RelayChannel(Guid) → `foreach (var yp in YellowPages) yp.FindTracker(channel_id)`
+- 参照: `PCPYellowPageClient.cs` FindTracker → 503 なら `ReadHosts` → `hosts.FirstOrDefault(h => h.IsTracker)`、200 なら `AnnounceUri`
+
 ### 再接続ロジック
 
 #### バックオフの削除

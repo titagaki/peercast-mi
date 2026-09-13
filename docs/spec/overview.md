@@ -23,7 +23,6 @@ Go 製 PeerCast ノードの実装仕様。ブロードキャストノード（R
 
 - Web UI
 - push 接続 (firewalled ノード向け)
-- 上流ノードの自動探索 (YP からの host アトムを使った自動接続)
 
 ---
 
@@ -69,7 +68,7 @@ Go 製 PeerCast ノードの実装仕様。ブロードキャストノード（R
        │
        ├─ GET /channel/<id> → PCPOutputStream  × N  (下流リレーノード)
        ├─ GET /stream/<id>  → HTTPOutputStream × N  (視聴プレイヤー)
-       ├─ GET /pls/<id>     → M3U プレイリスト (?tip= 指定でオンデマンドリレー開始)
+       ├─ GET /pls/<id>     → M3U プレイリスト (未登録ならオンデマンドリレー開始。?tip= がなければ YP に tracker を問い合わせる)
        ├─ pcp\n             → handlePing() (YP ファイアウォール疎通確認)
        └─ POST /api/1       → JSON-RPC API (internal/jsonrpc)
 ```
@@ -137,7 +136,7 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 5. Listener を起動 (ポート 7144 待ち受け)
 6. YPClient を起動 (COUT 接続・bcst ループ開始) ← YP が設定されている場合のみ
    ↳ oleh で得た globalIP を Listener と Manager (→ 全 RelayClient) に伝播する (OnGlobalIP)
-7. Listener にオンデマンドリレー (`/pls/<id>?tip=host:port`) のフック (→ Manager.StartRelay) を登録
+7. Listener にオンデマンドリレー (`/pls/<id>[?tip=host:port]`) のフック (→ tip がなければ relay.FindTracker で全 `[[yp]]` に問い合わせ → Manager.StartRelay) を登録
 8. JSON-RPC API ハンドラーを Listener に登録
 9. Cleaner を起動 (channel_cleanup_minutes > 0 の場合)
 10. RTMP サーバーを起動 (ポート 1935 待ち受け)
@@ -163,9 +162,11 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 ### 4.3 リレーチャンネル開始フロー (オンデマンド)
 
 ```
-1. プレイヤーが /pls/<channelId>?tip=<host:port> にアクセス
+1. プレイヤーが /pls/<channelId>[?tip=<host:port>] にアクセス
    (/stream/ や /channel/ への直接アクセスでは自動リレーは開始せず 404 を返す)
 2. Listener がチャンネル未登録を検出し、OnDemandRelay フック → Manager.StartRelay() を呼ぶ
+   ↳ tip がなければ先に relay.FindTracker() で config の全 [[yp]] に順に問い合わせ、tracker の host:port を得る
+     (-yp で選んだ YP に限らない)。どの YP も知らなければ 404
 3. Manager が Channel (IsBroadcasting=false) を生成して登録し、NewRelay で RelayClient を生成
    ↳ 既知の globalIP を渡し、停止時に自分を Manager から削除するフック (SetOnStopped) を登録
 4. RelayClient をゴルーチンとして Run() で起動

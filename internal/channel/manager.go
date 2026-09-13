@@ -279,6 +279,11 @@ func (m *Manager) TotalSendRate() int64 {
 	return total
 }
 
+// GlobalIP returns the node's global IP learned from the YP (0 if unknown).
+func (m *Manager) GlobalIP() uint32 {
+	return m.globalIP.Load()
+}
+
 // SetGlobalIP records the node's global IP (learned from the YP) and
 // propagates it to all active relay clients. Relay clients started later
 // receive it via StartRelay.

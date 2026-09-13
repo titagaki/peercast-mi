@@ -100,8 +100,28 @@ func main() {
 		defer ypClient.Stop()
 	}
 
-	// Wire on-demand relay: auto-start relay when /pls/ is requested with a tip.
+	// Wire on-demand relay: auto-start relay when /pls/ is requested. Without
+	// a tip, every configured YP is asked for the tracker in turn
+	// (PeerCastStation 互換: PeerCast.RelayChannel → FindTracker)。
+	var ypAddrs []string
+	for _, y := range cfg.YPs {
+		if hp, err := y.HostPort(); err == nil {
+			ypAddrs = append(ypAddrs, hp)
+		} else {
+			slog.Warn("yp: invalid addr, not used for tracker lookup", "addr", y.Addr, "err", err)
+		}
+	}
 	listener.OnDemandRelay = func(channelID pcp.GnuID, upstreamAddr string) error {
+		if upstreamAddr == "" {
+			if _, ok := mgr.GetByID(channelID); ok {
+				return nil
+			}
+			var err error
+			upstreamAddr, err = relay.FindTracker(context.Background(), ypAddrs, channelID, sessionID, mgr.GlobalIP())
+			if err != nil {
+				return err
+			}
+		}
 		_, err := mgr.StartRelay(channelID, upstreamAddr)
 		return err
 	}

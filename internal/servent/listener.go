@@ -27,8 +27,10 @@ type ChannelStore interface {
 }
 
 // OnDemandRelayFunc is called by the /pls/ handler when a channel is not
-// found locally and a tip address is provided. Implementations should
-// register the channel in the manager and start a relay client.
+// found locally. upstreamAddr is the tip query parameter, or "" when the
+// request had none; implementations then have to find the tracker
+// themselves (e.g. by asking the YPs). Implementations should register the
+// channel in the manager and start a relay client.
 // If the channel is already active, implementations should return nil.
 type OnDemandRelayFunc func(channelID pcp.GnuID, upstreamAddr string) error
 
@@ -218,12 +220,10 @@ func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader, _ []byte) {
 	ch, ok := l.mgr.GetByID(channelID)
 	if !ok && l.OnDemandRelay != nil {
 		tip := req.URL.Query().Get("tip")
-		if tip != "" {
-			if relayErr := l.OnDemandRelay(channelID, tip); relayErr != nil {
-				slog.Warn("pls: auto-relay failed", "remote", cc.RemoteAddr(), "err", relayErr)
-			} else {
-				ch, ok = l.mgr.GetByID(channelID)
-			}
+		if relayErr := l.OnDemandRelay(channelID, tip); relayErr != nil {
+			slog.Warn("pls: auto-relay failed", "remote", cc.RemoteAddr(), "tip", tip, "err", relayErr)
+		} else {
+			ch, ok = l.mgr.GetByID(channelID)
 		}
 	}
 	if !ok {

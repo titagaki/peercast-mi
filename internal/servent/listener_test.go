@@ -2,11 +2,13 @@ package servent
 
 import (
 	"bufio"
+	"io"
 	"net"
 	"testing"
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
+	"github.com/titagaki/peercast-mi/internal/channel"
 	"github.com/titagaki/peercast-mi/internal/version"
 )
 
@@ -136,4 +138,38 @@ func TestHandlePing_InvalidHelo(t *testing.T) {
 
 	br := bufio.NewReader(server)
 	handlePing(server, br, pcp.GnuID{})
+}
+
+type notFoundStore struct{}
+
+func (notFoundStore) GetByID(pcp.GnuID) (*channel.Channel, bool) { return nil, false }
+func (notFoundStore) TotalRelays() int                           { return 0 }
+func (notFoundStore) TotalSendRate() int64                       { return 0 }
+
+// TestHandlePLS_CallsOnDemandRelayWithoutTip は tip のない /pls/ でも OnDemandRelay が
+// 空の tip で呼ばれる (tracker 探索は実装側に委ねる) ことを確認する。
+func TestHandlePLS_CallsOnDemandRelayWithoutTip(t *testing.T) {
+	for _, tc := range []struct{ query, wantTip string }{
+		{"", ""},
+		{"?tip=203.0.113.9:7144", "203.0.113.9:7144"},
+	} {
+		l := NewListener(pcp.GnuID{}, notFoundStore{}, 7144, 0, 0, 0, 0)
+		var gotTip string
+		called := false
+		l.OnDemandRelay = func(id pcp.GnuID, tip string) error {
+			called = true
+			gotTip = tip
+			return nil
+		}
+		server, client := net.Pipe()
+		go func() {
+			io.WriteString(client, "GET /pls/000102030405060708090a0b0c0d0e0f"+tc.query+" HTTP/1.0\r\nHost: localhost\r\n\r\n")
+			io.ReadAll(client)
+		}()
+		l.handlePLS(newCountingConn(server), bufio.NewReader(server), nil)
+		client.Close()
+		if !called || gotTip != tc.wantTip {
+			t.Fatalf("query %q: called=%v tip=%q, want tip %q", tc.query, called, gotTip, tc.wantTip)
+		}
+	}
 }
