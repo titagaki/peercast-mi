@@ -152,6 +152,7 @@ func (c *Client) Run() {
 		switch reason {
 		case stopReasonUnavailable:
 			// Host is full — ignore it and immediately try the next best.
+			slog.Info("relay: host full, trying next", "addr", targetAddr, "known_hosts", len(c.sourceNodes.List()))
 			c.ignoredNodes.Add(targetAddr)
 			continue
 		case stopReasonOffAir, stopReasonError:
@@ -291,7 +292,11 @@ func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, stop
 		}
 	}
 
-	slog.Info("relay: connected", "addr", addr, "channel", chanIDHex, "status", statusCode)
+	if statusCode == 200 {
+		slog.Info("relay: connected", "addr", addr, "channel", chanIDHex)
+	} else {
+		slog.Info("relay: upstream full, collecting alternative hosts", "addr", addr, "channel", chanIDHex)
+	}
 	return statusCode, br, stopReasonNone, nil
 }
 
@@ -326,11 +331,12 @@ func (c *Client) processBody(conn net.Conn, br *bufio.Reader) (stopReason, error
 			// No-op (matches PeerCastStation).
 		case pcp.PCPQuit:
 			code, _ := atom.GetInt()
-			reason := stopReasonOffAir
 			if code == pcp.PCPErrorQuit+pcp.PCPErrorUnavailable {
-				reason = stopReasonUnavailable
+				// The expected end of a 503 exchange: the host list is
+				// complete. Not an error; Run moves on to the next host.
+				return stopReasonUnavailable, nil
 			}
-			return reason, fmt.Errorf("quit from upstream (code %d)", code)
+			return stopReasonOffAir, fmt.Errorf("quit from upstream (code %d)", code)
 		}
 	}
 }
@@ -360,11 +366,12 @@ func (c *Client) processHosts(conn net.Conn, br *bufio.Reader) (stopReason, erro
 			}
 		case pcp.PCPQuit:
 			code, _ := atom.GetInt()
-			reason := stopReasonOffAir
 			if code == pcp.PCPErrorQuit+pcp.PCPErrorUnavailable {
-				reason = stopReasonUnavailable
+				// The expected end of a 503 exchange: the host list is
+				// complete. Not an error; Run moves on to the next host.
+				return stopReasonUnavailable, nil
 			}
-			return reason, fmt.Errorf("quit from upstream (code %d)", code)
+			return stopReasonOffAir, fmt.Errorf("quit from upstream (code %d)", code)
 		}
 	}
 }

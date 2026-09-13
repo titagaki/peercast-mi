@@ -17,8 +17,7 @@
 
 ### 保守
 
-- [ ] `Channel.StartTime` が exported なフィールドのまま — 他と同様にアクセサ経由にするか検討
-- [ ] `relay.Client.handshake` が 503 のときも `slog.Info("relay: connected")` を出す — ログレベル・文言の見直し
+(なし)
 
 ## 進行中
 
@@ -30,6 +29,8 @@
 
 ## 完了
 
+- [x] 2026-09-14 `Channel.StartTime` を unexport (外部参照なし、`UptimeSeconds()` のみ)
+- [x] 2026-09-14 relay の 503 時ログを整理 — 「connected」「connection error」ではなく「upstream full, collecting alternative hosts」「host full, trying next」を Info で出す。`QUIT+UNAVAILABLE` はエラー扱いしない
 - [x] 2026-09-14 HTTP 直接視聴の ICY メタデータ (`icy-metaint`) — 対象外として閉じる。peercast-yt の MP3 + WinAmp 向け機能で PeerCastStation も非対応、FLV には挿入できない ([spec/components.md 4.9](spec/components.md))
 - [x] 2026-09-14 push (GIV) 接続の再検討 — 対象外を維持。PeerCastStation も非対応 ([decisions/0003](decisions/0003-no-push-connection.md) に追記)
 - [x] 2026-09-14 HTTP 視聴は ChannelInfo を最大 10 秒待ってから 200 (時間切れは 504)。リレー直後の `icy-name` 空・`Content-Type` 既定値も解消 — [decisions/0017](decisions/0017-http-wait-for-info.md)
