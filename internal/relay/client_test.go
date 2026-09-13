@@ -457,11 +457,26 @@ func fakeUpstream(t *testing.T, ln net.Listener, expectedChanID pcp.GnuID) error
 
 // --- Run / Stop lifecycle ---
 
+// closedPort returns a loopback "host:port" that nothing is listening on, so
+// that a dial to it is refused immediately. Hard-coding e.g. 127.0.0.1:1 is
+// not reliable: some environments (WSL2 mirrored networking) silently drop
+// the SYN instead of refusing, which stalls until the dial timeout.
+func closedPort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
+
 func TestRunStop_TrackerFail(t *testing.T) {
 	ch := newTestChannel()
 	// Use an invalid address so connect to tracker fails immediately.
 	// With no backoff, Run should stop after the tracker fails (no other hosts).
-	c := New("127.0.0.1:1", pcp.GnuID{}, pcp.GnuID{}, 0, ch)
+	c := New(closedPort(t), pcp.GnuID{}, pcp.GnuID{}, 0, ch)
 
 	done := make(chan struct{})
 	go func() {
@@ -471,7 +486,7 @@ func TestRunStop_TrackerFail(t *testing.T) {
 
 	select {
 	case <-done:
-		// OK �� Run exited because tracker connection failed.
+		// OK — Run exited because tracker connection failed.
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not exit after tracker failure")
 	}
@@ -499,7 +514,7 @@ func TestRunStop_NonTrackerIgnored(t *testing.T) {
 
 	// Tracker is unreachable; one non-tracker source node closes immediately.
 	// Flow: source node → error → ignored → tracker → refused → stop.
-	c := New("127.0.0.1:1", pcp.GnuID{}, pcp.GnuID{}, 0, ch)
+	c := New(closedPort(t), pcp.GnuID{}, pcp.GnuID{}, 0, ch)
 	c.sourceNodes.Add(SourceNode{
 		SessionID:   pcp.GnuID{0x01},
 		GlobalAddr:  ln.Addr().String(),
@@ -523,7 +538,7 @@ func TestRunStop_NonTrackerIgnored(t *testing.T) {
 func TestStopIdempotent(t *testing.T) {
 	ch := newTestChannel()
 	// Use an unreachable tracker so Run exits immediately (connection refused).
-	c := New("127.0.0.1:1", pcp.GnuID{}, pcp.GnuID{}, 0, ch)
+	c := New(closedPort(t), pcp.GnuID{}, pcp.GnuID{}, 0, ch)
 
 	done := make(chan struct{})
 	go func() {

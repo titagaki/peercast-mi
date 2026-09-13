@@ -39,7 +39,8 @@ const (
 type stopReason int
 
 const (
-	stopReasonError       stopReason = iota // I/O or protocol error
+	stopReasonNone        stopReason = iota // no stop (handshake succeeded)
+	stopReasonError                         // I/O or protocol error
 	stopReasonUnavailable                   // quit code 1003
 	stopReasonOffAir                        // quit with other code
 )
@@ -47,11 +48,11 @@ const (
 // Client connects to an upstream PeerCast node and writes the received stream
 // into a local channel, reconnecting on failure.
 type Client struct {
-	trackerAddr  string
-	channelID    pcp.GnuID
-	sessionID    pcp.GnuID
-	listenPort   uint16
-	ch           *channel.Channel
+	trackerAddr string
+	channelID   pcp.GnuID
+	sessionID   pcp.GnuID
+	listenPort  uint16
+	ch          *channel.Channel
 
 	sourceNodes  *SourceNodeList
 	ignoredNodes *IgnoredNodeCollection
@@ -279,15 +280,19 @@ func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, stop
 		return 0, nil, stopReasonError, fmt.Errorf("expected oleh, got %s", oleh.Tag)
 	}
 
-	// Record upstream node info for downstream HOST atom on shutdown.
-	olehPkt, _ := pcp.ParseHeloPacket(oleh)
-	if tcp, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
-		upIP, _ := pcp.IPv4ToUint32(tcp.IP)
-		c.ch.SetUpstreamNodeInfo(olehPkt.SessionID, upIP, uint16(tcp.Port))
+	// Record upstream node info for the HOST atom handed to downstream on
+	// shutdown. Only for an accepted (200) relay: a 503 host is not our
+	// upstream and must not be advertised as one.
+	if statusCode == 200 {
+		olehPkt, _ := pcp.ParseHeloPacket(oleh)
+		if tcp, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+			upIP, _ := pcp.IPv4ToUint32(tcp.IP)
+			c.ch.SetUpstreamNodeInfo(olehPkt.SessionID, upIP, uint16(tcp.Port))
+		}
 	}
 
-	slog.Info("relay: connected", "addr", addr, "channel", chanIDHex)
-	return statusCode, br, stopReasonError, nil
+	slog.Info("relay: connected", "addr", addr, "channel", chanIDHex, "status", statusCode)
+	return statusCode, br, stopReasonNone, nil
 }
 
 // processBody handles the main receive loop for a 200 (connected) relay.
@@ -363,7 +368,6 @@ func (c *Client) processHosts(conn net.Conn, br *bufio.Reader) (stopReason, erro
 		}
 	}
 }
-
 
 func (c *Client) handleChan(atom *pcp.Atom) {
 	ch, err := pcp.ParseChanPacket(atom)

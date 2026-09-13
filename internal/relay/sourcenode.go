@@ -136,4 +136,3 @@ func parseSourceNode(atom *pcp.Atom) (SourceNode, bool) {
 	}
 	return node, true
 }
-

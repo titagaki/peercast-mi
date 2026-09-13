@@ -34,11 +34,11 @@ type PCPOutputStream struct {
 	bcstCh       chan *pcp.Atom
 	globalIP     uint32
 	listenPort   uint16
-	remotePort    uint16 // 下流ピアのポート（0 = firewalled）
-	peerAgent     string // 下流ピアの agent 文字列
-	peerVersion   uint32 // 下流ピアの PCP version
-	maxRelays     int    // per-channel 制限 (0 = unlimited)
-	maxListeners  int    // per-channel 制限 (0 = unlimited)
+	remotePort   uint16 // 下流ピアのポート（0 = firewalled）
+	peerAgent    string // 下流ピアの agent 文字列
+	peerVersion  uint32 // 下流ピアの PCP version
+	maxRelays    int    // per-channel 制限 (0 = unlimited)
+	maxListeners int    // per-channel 制限 (0 = unlimited)
 }
 
 func newPCPOutputStream(conn *countingConn, br *bufio.Reader, sessionID pcp.GnuID, ch *channel.Channel, id int, globalIP uint32, listenPort uint16, maxRelays, maxListeners int) *PCPOutputStream {
@@ -164,7 +164,7 @@ func (o *PCPOutputStream) handshake(admitted bool) (startPos uint32, err error) 
 		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorBadAgent)
 		return 0, fmt.Errorf("no version in helo")
 	}
-	if helo.Version < 1200 {
+	if helo.Version < version.PCPClientMinVersion {
 		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorBadAgent)
 		return 0, fmt.Errorf("bad agent version %d", helo.Version)
 	}
@@ -648,14 +648,6 @@ func buildChanAtom(chanID, bcID pcp.GnuID, info channel.ChannelInfo, track chann
 			Pos:  headerPos,
 			Data: header,
 		},
-	}).BuildAtom()
-}
-
-func buildPktHeadAtom(header []byte, pos uint32) *pcp.Atom {
-	return (&pcp.ChanPktData{
-		Type: pcp.NewID4("head"),
-		Pos:  pos,
-		Data: header,
 	}).BuildAtom()
 }
 

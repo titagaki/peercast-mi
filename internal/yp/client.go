@@ -187,9 +187,10 @@ func (c *Client) run() (connected bool, err error) {
 	}
 
 	updateInterval := defaultInterval
-	sendImmediately := false
 
-	// Read oleh + optional root + ok.
+	// Read oleh + optional root + ok. A root.update flag during the
+	// handshake needs no special handling: an initial bcst is always sent
+	// right after the handshake anyway.
 	for {
 		a, err := conn.ReadAtom()
 		if err != nil {
@@ -199,12 +200,8 @@ func (c *Client) run() (connected bool, err error) {
 		case pcp.PCPOleh:
 			c.handleOleh(a)
 		case pcp.PCPRoot:
-			interval, immediate := parseRoot(a)
-			if interval > 0 {
+			if interval, _ := parseRoot(a); interval > 0 {
 				updateInterval = time.Duration(interval) * time.Second
-			}
-			if immediate {
-				sendImmediately = true
 			}
 		case pcp.PCPOK:
 			goto handshakeDone
@@ -229,10 +226,7 @@ handshakeDone:
 	ticker := time.NewTicker(updateInterval)
 	defer ticker.Stop()
 
-	// Send initial bcst for all active channels. The handshake-phase
-	// sendImmediately flag is honored implicitly here: regardless of its value
-	// we perform an initial announcement right after the handshake.
-	_ = sendImmediately
+	// Send initial bcst for all active channels.
 	if err := c.sendAllBcst(conn); err != nil {
 		return true, fmt.Errorf("write bcst: %w", err)
 	}

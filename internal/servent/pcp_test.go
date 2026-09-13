@@ -99,14 +99,6 @@ func TestBuildChanTrackAtom(t *testing.T) {
 	}
 }
 
-// TestBuildPktHeadAtom は PCPChanPkt タグを持つアトムが生成されることを確認する。
-func TestBuildPktHeadAtom(t *testing.T) {
-	a := buildPktHeadAtom([]byte{0x01, 0x02}, 42)
-	if a.Tag != pcp.PCPChanPkt {
-		t.Errorf("Tag: got %v, want PCPChanPkt", a.Tag)
-	}
-}
-
 // TestBuildChanAtom はトップレベルが PCPChan タグを持つアトムが生成されることを確認する。
 func TestBuildChanAtom(t *testing.T) {
 	var id pcp.GnuID

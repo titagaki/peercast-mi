@@ -143,12 +143,15 @@ func TestBuildHostAtom_Flags(t *testing.T) {
 			if hasTracker != tt.wantTracker {
 				t.Errorf("Tracker flag: got %v, want %v", hasTracker, tt.wantTracker)
 			}
-			// Relay, Recv, CIN should always be set.
+			// Relay and CIN are set unless RelayFull; Recv only when IsReceiving.
 			if flags&pcp.PCPHostFlags1Relay == 0 {
-				t.Error("Relay flag should always be set")
+				t.Error("Relay flag should be set when not RelayFull")
 			}
-			if flags&pcp.PCPHostFlags1Recv == 0 {
-				t.Error("Recv flag should always be set")
+			if flags&pcp.PCPHostFlags1CIN == 0 {
+				t.Error("CIN flag should always be set")
+			}
+			if flags&pcp.PCPHostFlags1Recv != 0 {
+				t.Error("Recv flag should not be set when IsReceiving is false")
 			}
 		})
 	}

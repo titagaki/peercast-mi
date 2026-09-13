@@ -589,6 +589,13 @@ func TestRun_HandshakeAndBcst(t *testing.T) {
 	}
 }
 
+// signalStop closes stopCh without waiting for doneCh. Tests that call the
+// unexported run() directly (bypassing Run) never close doneCh, so Stop()
+// would otherwise block for the full stopTimeout.
+func signalStop(c *Client) {
+	c.stopOnce.Do(func() { close(c.stopCh) })
+}
+
 // -----------------------------------------------------------------------
 // run() via net.Pipe — test the actual run() method
 // -----------------------------------------------------------------------
@@ -691,7 +698,7 @@ func TestRun_FullIntegration(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Stop the client → should send quit.
-	c.Stop()
+	signalStop(c)
 	runWg.Wait()
 	serverWg.Wait()
 
@@ -856,7 +863,7 @@ func TestRun_NoChannels(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	c.Stop()
+	signalStop(c)
 	runWg.Wait()
 	serverWg.Wait()
 	// If we get here without hanging, the test passes.
@@ -935,7 +942,7 @@ func TestRun_BumpSendsBcst(t *testing.T) {
 	c.Bump()
 	time.Sleep(100 * time.Millisecond)
 
-	c.Stop()
+	signalStop(c)
 	runWg.Wait()
 	serverWg.Wait()
 
@@ -997,8 +1004,18 @@ func TestRun_HandshakeQuit(t *testing.T) {
 
 func TestRun_DialFailure(t *testing.T) {
 	mgr := channel.NewManager(id.NewRandom())
-	// Use a port that is not listening.
-	c := New("127.0.0.1:1", id.NewRandom(), id.NewRandom(), mgr, 7144, 0, 0)
+	// Use a loopback port that was just released so the dial is refused
+	// immediately. A fixed address such as 127.0.0.1:1 is not reliable: some
+	// environments (WSL2 mirrored networking) drop the SYN instead of
+	// refusing it, and pcp.Dial has no timeout, so the test would stall for
+	// the OS SYN retry period (~2 minutes).
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	c := New(addr, id.NewRandom(), id.NewRandom(), mgr, 7144, 0, 0)
 
 	connected, err := c.run()
 	if connected {
@@ -1069,7 +1086,7 @@ func TestRun_RootInterval(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	c.Stop()
+	signalStop(c)
 	runWg.Wait()
 	serverWg.Wait()
 	// Test passes if run() accepted the root interval without issues.

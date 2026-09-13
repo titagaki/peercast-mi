@@ -93,14 +93,6 @@ func (l *Listener) Serve() error {
 	}
 }
 
-// ListenAndServe is a convenience wrapper around Listen + Serve.
-func (l *Listener) ListenAndServe() error {
-	if err := l.Listen(); err != nil {
-		return err
-	}
-	return l.Serve()
-}
-
 // SetGlobalIP updates the global IP address reported in PCPHost atoms.
 // It is called with the IP learned from the YP oleh.
 func (l *Listener) SetGlobalIP(ip uint32) {
