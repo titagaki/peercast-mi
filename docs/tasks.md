@@ -9,7 +9,7 @@
 
 ### 互換性・検証
 
-- [ ] ChannelID 生成アルゴリズムが peercast-yt / PeerCastStation と同じ入力で同じ ID になるか実機で検証する — [decisions/0001](decisions/0001-channel-id-algorithm.md)
+- [ ] peercast-yt から移行したとき同じ ChannelID を保つ必要があるかを判断する。必要なら StreamKey の連結をやめる (または StreamKey が空なら連結しない) 設計変更を ADR に記録する — [decisions/0001](decisions/0001-channel-id-algorithm.md) 検証済み: アルゴリズム自体は peercast-yt と一致するが入力が異なる。PeerCastStation は別方式 (SHA512+MD5) なので一致しない
 - [ ] `x-peercast-pos` で `reqPos == 0` を「未指定」と同一視している点の妥当性確認 — [decisions/0002](decisions/0002-x-peercast-pos-resume.md)
 - [ ] YP からの host アトム情報を使った上流ノードの自動探索 (現在は `/pls/?tip=` で明示された tracker からのみ開始) — `internal/relay/select.go` の候補選択はあるが YP 経由の初期候補取得がない
 

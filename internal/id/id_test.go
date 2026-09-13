@@ -1,6 +1,7 @@
 package id
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -118,5 +119,39 @@ func TestChannelID_DoesNotMutateBroadcastID(t *testing.T) {
 	ChannelID(bid, "ch", "genre", 128)
 	if bid != orig {
 		t.Errorf("ChannelID mutated broadcastID: got %v, want %v", bid, orig)
+	}
+}
+
+// TestChannelID_PeercastYTVectors は peercast-yt の GnuID::encode(nullptr, name, genre,
+// bitrate) (core/common/gnuid.cpp) を C++ でそのまま写したプログラムで計算した期待値と
+// 一致することを確認する (2026-09-13 検証、decisions/0001 参照)。
+// 空文字列、16 バイト境界 (16/17 バイト)、マルチバイト、16 バイト超、bitrate の
+// 下位 8 bit 切り捨て (256, 1000, 2000) を含む。
+func TestChannelID_PeercastYTVectors(t *testing.T) {
+	tests := []struct {
+		bid, name, genre string
+		bitrate          uint32
+		want             string
+	}{
+		{"000102030405060708090a0b0c0d0e0f", "TestChannel", "Pop", 128, "848b81f7978297e9b683968b88878dfb"},
+		{"000102030405060708090a0b0c0d0e0f", "TestChannel", "Pop", 1000, "ece3e99fffeaff81deebfee3e0efe593"},
+		{"deadbeefdeadbeefdeadbeefdeadbeef", "", "Pop", 500, "7a363a1b7a363a1b7a363a1b7a363a1b"},
+		{"deadbeefdeadbeefdeadbeefdeadbeef", "abc", "", 0, "bfcfddefbfcfddefbfcfddefbfcfddef"},
+		{"deadbeefdeadbeefdeadbeefdeadbeef", "0123456789abcdef", "x", 300, "c28091c2f58091c2fd80cac0f38693c0"},
+		{"deadbeefdeadbeefdeadbeefdeadbeef", "0123456789abcdefg", "xy", 300, "a4c9e8c08dff91b8848eb2e0f1feecc0"},
+		{"deadbeefdeadbeefdeadbeefdeadbeef", "短い名前", "ジャンル", 256, "dab0abefdc8ab8fce0abb4c9dea9a3fa"},
+		{"ffffffffffffffffffffffffffffffff", "a very long channel name exceeding sixteen bytes by quite a lot", "another quite long genre string here", 2000, "7d667123493e763d2261672875263609"},
+		{"ffffffffffffffffffffffffffffffff", "a", "b", 255, "03000300030003000300030003000300"},
+	}
+	for _, tt := range tests {
+		var bid pcp.GnuID
+		b, err := hex.DecodeString(tt.bid)
+		if err != nil || copy(bid[:], b) != 16 {
+			t.Fatalf("bad bid %q", tt.bid)
+		}
+		got := ChannelID(bid, tt.name, tt.genre, tt.bitrate)
+		if hex.EncodeToString(got[:]) != tt.want {
+			t.Errorf("ChannelID(%s, %q, %q, %d) = %x, want %s", tt.bid, tt.name, tt.genre, tt.bitrate, got[:], tt.want)
+		}
 	}
 }
