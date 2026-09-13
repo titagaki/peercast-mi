@@ -64,14 +64,6 @@ func (s *Server) Serve() error {
 	return s.srv.Serve(s.listener)
 }
 
-// ListenAndServe is a convenience wrapper around Listen + Serve.
-func (s *Server) ListenAndServe() error {
-	if err := s.Listen(); err != nil {
-		return err
-	}
-	return s.Serve()
-}
-
 // Close shuts down the RTMP server.
 func (s *Server) Close() {
 	s.srv.Close()
@@ -88,13 +80,19 @@ type handler struct {
 	streamKey  string // set in OnPublish; empty until then
 
 	// Accumulated sequence headers and metadata.
-	metaTag    []byte // onMetaData FLV tag (timestamp zeroed)
-	avcTag     []byte // AVC sequence header FLV tag (timestamp zeroed)
-	aacTag     []byte // AAC sequence header FLV tag (timestamp zeroed)
-	headerSent bool   // true once the first complete header has been built
+	metaTag []byte // onMetaData FLV tag (timestamp zeroed)
+	avcTag  []byte // AVC sequence header FLV tag (timestamp zeroed)
+	aacTag  []byte // AAC sequence header FLV tag (timestamp zeroed)
 
 	metaPayload []byte // raw AMF0 payload from onMetaData (for deferred info update)
-	infoApplied bool   // true once metadata info has been applied to the channel
+
+	// The channel the current head packet / onMetaData info was last applied
+	// to. The encoder may connect before broadcastChannel creates the channel,
+	// and the channel may be stopped and re-created while the encoder stays
+	// connected, so both are re-applied whenever ch() returns a different
+	// channel than the one they were last applied to.
+	headerAppliedTo *channel.Channel
+	infoAppliedTo   *channel.Channel
 
 	streamPos uint32 // running byte position counter
 }
@@ -106,6 +104,11 @@ func newHandler(mgr ChannelManager, remoteAddr string) *handler {
 // ch returns the active channel for this connection's stream key, or nil if
 // OnPublish has not been called yet or broadcastChannel has not been called.
 // Data received before broadcastChannel is called is silently dropped.
+//
+// The channel is looked up on every call rather than cached so that a
+// stopChannel + broadcastChannel cycle while the encoder stays connected
+// transparently switches to the new channel instead of writing into the
+// stopped one.
 func (h *handler) ch() *channel.Channel {
 	if h.streamKey == "" {
 		return nil
@@ -248,8 +251,8 @@ func (h *handler) rebuildHeader() {
 	)
 
 	ch.SetHeader(head, 0)
-	if !h.headerSent {
-		h.headerSent = true
+	if h.headerAppliedTo != ch {
+		h.headerAppliedTo = ch
 		slog.Info("rtmp: stream started", "remote", h.remoteAddr, "key", h.streamKey)
 	}
 }
@@ -259,6 +262,11 @@ func (h *handler) writeData(tag []byte, contFlags byte) {
 	ch := h.ch()
 	if ch == nil {
 		return
+	}
+	// Deferred header: sequence headers may have arrived before this channel
+	// existed (or for a previous channel on the same stream key).
+	if h.headerAppliedTo != ch {
+		h.rebuildHeader()
 	}
 	// Append PreviousTagSize (4 bytes big-endian) so that concatenated data
 	// packets form a valid FLV byte stream.
@@ -314,11 +322,11 @@ func appendFLVTagWithBackPointer(buf, tag []byte) []byte {
 // the channel. It is called from OnSetDataFrame and retried from rebuildHeader
 // so that metadata arriving before broadcastChannel is not lost.
 func (h *handler) applyMetaInfo() {
-	if h.infoApplied || len(h.metaPayload) == 0 {
+	if len(h.metaPayload) == 0 {
 		return
 	}
 	ch := h.ch()
-	if ch == nil {
+	if ch == nil || h.infoAppliedTo == ch {
 		return
 	}
 	dec := goamf0.NewDecoder(bytes.NewReader(h.metaPayload))
@@ -368,7 +376,7 @@ func (h *handler) applyMetaInfo() {
 	}
 
 	ch.SetInfo(info)
-	h.infoApplied = true
+	h.infoAppliedTo = ch
 }
 
 var reKbpsSuffix = regexp.MustCompile(`(\d+)k`)

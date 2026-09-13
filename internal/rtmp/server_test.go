@@ -564,3 +564,77 @@ func TestApplyMetaInfo_MaxBitrateNumeric(t *testing.T) {
 		t.Fatalf("bitrate: got %d, want 4128", ch.Info().Bitrate)
 	}
 }
+
+// -----------------------------------------------------------------------
+// Deferred header (encoder connects before broadcastChannel)
+// -----------------------------------------------------------------------
+
+func TestRebuildHeader_DeferredUntilChannelExists(t *testing.T) {
+	mgr := channel.NewManager(id.NewRandom())
+	const key = "sk_testkey"
+	if err := mgr.IssueStreamKey("test-account", key); err != nil {
+		t.Fatal(err)
+	}
+	h := newHandler(mgr, "127.0.0.1:9999")
+	h.streamKey = key
+
+	// AVC sequence header arrives BEFORE broadcastChannel.
+	if err := h.OnVideo(0, bytes.NewReader([]byte{0x17, 0x00, 0x01, 0x02})); err != nil {
+		t.Fatal(err)
+	}
+
+	ch, err := mgr.Broadcast(key, channel.ChannelInfo{Name: "test"}, channel.TrackInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First keyframe after the channel exists must trigger the deferred header.
+	if err := h.OnVideo(40, bytes.NewReader([]byte{0x17, 0x01, 0xAA})); err != nil {
+		t.Fatal(err)
+	}
+	header, _ := ch.Header()
+	if len(header) == 0 || !bytes.HasPrefix(header, []byte("FLV")) {
+		t.Fatalf("expected FLV header to be applied to the channel, got %d bytes", len(header))
+	}
+	if !ch.HasData() {
+		t.Fatal("expected keyframe to be written")
+	}
+}
+
+func TestRebuildHeader_ReappliedAfterRebroadcast(t *testing.T) {
+	mgr := channel.NewManager(id.NewRandom())
+	const key = "sk_testkey"
+	if err := mgr.IssueStreamKey("test-account", key); err != nil {
+		t.Fatal(err)
+	}
+	h := newHandler(mgr, "127.0.0.1:9999")
+	h.streamKey = key
+
+	ch1, err := mgr.Broadcast(key, channel.ChannelInfo{Name: "test"}, channel.TrackInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.OnVideo(0, bytes.NewReader([]byte{0x17, 0x00, 0x01, 0x02})); err != nil {
+		t.Fatal(err)
+	}
+	if hdr, _ := ch1.Header(); len(hdr) == 0 {
+		t.Fatal("header should be applied to the first channel")
+	}
+
+	// stopChannel + broadcastChannel while the encoder stays connected.
+	mgr.Stop(ch1.ID)
+	ch2, err := mgr.Broadcast(key, channel.ChannelInfo{Name: "test"}, channel.TrackInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr, _ := ch2.Header(); len(hdr) != 0 {
+		t.Fatal("new channel should start without a header")
+	}
+
+	if err := h.OnVideo(40, bytes.NewReader([]byte{0x17, 0x01, 0xAA})); err != nil {
+		t.Fatal(err)
+	}
+	if hdr, _ := ch2.Header(); len(hdr) == 0 {
+		t.Fatal("header should be re-applied to the new channel on first data")
+	}
+}
