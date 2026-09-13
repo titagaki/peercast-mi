@@ -62,7 +62,7 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは原則として **位置�
 | `getVersionInfo` | なし | `{ agentName }` |
 | `getSettings` | なし | `{ serverPort, rtmpPort }` |
 | `getChannels` | なし | チャンネルオブジェクトの配列 |
-| `getChannelInfo` | `[channelId]` | `{ info, track, yellowPages }` |
+| `getChannelInfo` | `[channelId]` | `{ info, track }` |
 | `getChannelStatus` | `[channelId]` | status オブジェクト |
 | `setChannelInfo` | `[channelId, info, track]` | `null` |
 | `stopChannel` | `[channelId]` | `null` |
@@ -176,7 +176,7 @@ ChannelID は入力パラメータから決定論的に生成される。同じ 
 
 **返却値:**
 ```json
-{ "agentName": "peercast-mi/0.0.1" }
+{ "agentName": "PeerCast-MI/0.0.1" }
 ```
 
 ---
@@ -296,8 +296,8 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 | `uptime` | チャンネル開始からの経過秒数（`Channel.UptimeSeconds()`） |
 | `localRelays` | 自ノードの PCP リレー接続数（`Channel.NumRelays()`） |
 | `localDirects` | 自ノードの HTTP 直接視聴接続数（`Channel.NumListeners()`） |
-| `totalRelays` | PCP リレー接続数（現時点では `localRelays` と同値） |
-| `totalDirects` | HTTP 直接視聴接続数（現時点では `localDirects` と同値） |
+| `totalRelays` | `localRelays` + 下流ノードが BCST HOST で報告したリレー数の合計（`Channel.TotalRelays()`） |
+| `totalDirects` | `localDirects` + 下流ノードが BCST HOST で報告した視聴者数の合計（`Channel.TotalListeners()`） |
 | `isBroadcasting` | ブロードキャストチャンネル (RTMP ソース) なら `true`、リレーチャンネルなら `false` |
 | `isRelayFull` | リレー接続が上限に達していれば `true`（`Channel.IsRelayFull()`）。上限未設定時は常に `false` |
 | `isDirectFull` | 直接視聴接続が上限に達していれば `true`（`Channel.IsDirectFull()`）。上限未設定時は常に `false` |
@@ -462,7 +462,7 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
     "isReceiving": true,
     "isControlFull": false,
     "version": 1218,
-    "versionString": "peercast-mi/0.0.1",
+    "versionString": "PeerCast-MI/0.0.1",
     "children": []
   }
 ]

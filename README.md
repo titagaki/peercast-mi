@@ -9,7 +9,7 @@ Go 製 PeerCast ノード。Root モード以外（ブロードキャスト・�
 
 ## 必要なもの
 
-- Go 1.22 以上
+- Go 1.25 以上
 - RTMP 対応エンコーダー (OBS Studio など)
 
 ## インストール
@@ -59,6 +59,17 @@ peercast_port = 7144
 # コンテンツリングバッファが保持する秒数 (デフォルト: 0 = 8秒)
 # ビットレートから必要なパケット数を自動計算する
 # content_buffer_seconds = 8
+
+# 視聴・リレーのないリレーチャンネルを自動削除するまでの分数 (デフォルト: 20、0 = 無効)
+# channel_cleanup_minutes = 20
+
+# 非 localhost からの JSON-RPC アクセスに要求する Basic 認証 (どちらか未設定なら非 localhost を拒否)
+# admin_user = "admin"
+# admin_pass = "secret"
+
+# JSON-RPC への CORS 要求を許可するオリジン。localhost / 127.0.0.1 のオリジンは常に許可される。
+# Web UI を LAN 上の別ホストから開く場合などに追加する
+# allowed_origins = ["http://192.168.1.10:5173"]
 
 [[yp]]
 name = "moe"
@@ -128,4 +139,8 @@ peercast-mi はポート 7144 で待ち受ける。
 
 ## JSON-RPC API
 
-メソッド一覧・パラメータ・返却値の詳細は [docs/api/jsonrpc.md](docs/api/jsonrpc.md) を参照。
+メソッド一覧・パラメータ・返却値の詳細は [docs/spec/api/jsonrpc.md](docs/spec/api/jsonrpc.md) を参照。
+
+## ドキュメント
+
+仕様・設計判断・参照資料・タスクは [docs/](docs/README.md) を参照。

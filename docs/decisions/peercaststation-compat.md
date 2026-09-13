@@ -1,6 +1,10 @@
 # PeerCastStation との互換性ノート
 
+- 状態: 採用 (継続的に追記)
+- 初出: 2026-04-05
+
 PeerCastStation のソースコードと比較して peercast-mi が合わせている動作・差異の記録。実装の根拠 (rationale) として残す。
+個別の判断が 1 件で完結するものは番号付き ADR ([README.md](README.md)) に、PeerCastStation との突き合わせで生じた細かな挙動合わせはこのファイルにまとめる。
 
 対応ファイル: `internal/relay/client.go`, `internal/channel/content.go`, `internal/channel/channel.go`, `internal/servent/pcp.go`, `internal/servent/http.go`
 

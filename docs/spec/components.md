@@ -1,8 +1,8 @@
 # peercast-mi コンポーネント仕様
 
-[spec.md](spec.md) のシステム概要・ライフサイクル・並行処理設計を前提とする。
+[overview.md](overview.md) のシステム概要・ライフサイクル・並行処理設計を前提とする。
 
-PeerCastStation との差異を埋めるために入れた動作の根拠 (rationale) については [peercaststation-compat.md](peercaststation-compat.md) を参照。
+PeerCastStation との差異を埋めるために入れた動作の根拠 (rationale) については [decisions/peercaststation-compat.md](../decisions/peercaststation-compat.md) を参照。
 
 ---
 
@@ -132,17 +132,19 @@ type TrackInfo struct {
 
 ```go
 type Content struct {
-    Pos       uint32 // ストリーム内バイト位置
+    Pos       uint32    // ストリーム内バイト位置
     Data      []byte
-    ContFlags byte   // PeerCastStation 互換ビットフラグ (0x00=None, 0x02=InterFrame, 0x04=AudioFrame)
+    ContFlags byte      // PeerCastStation 互換ビットフラグ (0x00=None, 0x01=Fragment, 0x02=InterFrame, 0x04=AudioFrame)
+    Timestamp time.Time // バッファに書き込まれた時刻 (Overflow 検出・HTTP 出力の順序保証に使用)
 }
 
 type ContentBuffer struct {
     header    []byte                    // 最新のストリームヘッダー
     headerPos uint32                    // ヘッダーのストリーム位置
     packets   []Content                 // リングバッファ (サイズはビットレートから自動計算)
-    count     int                       // 書き込み総数
+    count     int                       // 書き込み総数 (SetHeader で 0 にリセット)
     mu        sync.RWMutex
+    sigCh     chan struct{}             // Write ごとに close して差し替える通知チャネル
 }
 ```
 
@@ -155,11 +157,15 @@ type ContentBuffer struct {
 ### インターフェース
 
 ```go
-// SetHeader はストリームヘッダーを更新する。
-func (b *ContentBuffer) SetHeader(data []byte)
+// SetHeader はストリームヘッダーを更新し、リングバッファをリセットする。
+// 同一バイト列・同一 pos の再送は no-op (false を返す)。
+func (b *ContentBuffer) SetHeader(data []byte, pos uint32) bool
 
-// Write はデータパケットを追記する。
+// Write はデータパケットを追記し、Signal() 待ちの goroutine を起こす。
 func (b *ContentBuffer) Write(data []byte, pos uint32, contFlags byte)
+
+// Signal は次の Write で close されるチャネルを返す。
+func (b *ContentBuffer) Signal() <-chan struct{}
 
 // Header は最新のヘッダーとその位置を返す。
 func (b *ContentBuffer) Header() (data []byte, pos uint32)
@@ -173,6 +179,14 @@ func (b *ContentBuffer) NewestPos() uint32
 // Since は指定位置以降のパケットを返す。
 // pos が古すぎる場合は最古パケットから返す。空の場合は nil。
 func (b *ContentBuffer) Since(pos uint32) []Content
+
+// PacketsAfter は ref より (Timestamp, Pos) 順で厳密に新しいパケットを返す。
+// ref.Timestamp がゼロ値なら全パケットを返す。HTTPOutputStream が使用。
+func (b *ContentBuffer) PacketsAfter(ref Content) []Content
+
+// ContentPosition は最新コンテンツ末尾のバイト位置を返す (PeerCastStation の Channel.ContentPosition)。
+// リレー再接続時の x-peercast-pos に使う。
+func (b *ContentBuffer) ContentPosition() uint32
 
 // HasData はバッファにパケットが 1 件以上あるか返す。
 func (b *ContentBuffer) HasData() bool
@@ -233,6 +247,21 @@ type Channel struct {
     outputs        []OutputStream
     numListeners   int // HTTPOutputStream の数
     numRelays      int // PCPOutputStream の数
+
+    // 上流ノード情報 (リレークライアントが oleh 受信時に設定。下流切断時に HOST として返す)
+    upstreamSessionID pcp.GnuID
+    upstreamIP        uint32
+    upstreamPort      uint16
+
+    // BCST HOST 経由で学習した他ノードの情報 (nodes.go)。独自のロックを持つ leaf。
+    nodes nodeTable
+}
+
+// nodeTable (channel/nodes.go)
+type nodeTable struct {
+    mu         sync.RWMutex
+    knownHosts []*pcp.Atom            // 観測した Host アトム (最大 32 件、session ID でデデュープ)。リレー満杯時の代替候補
+    stats      map[pcp.GnuID]nodeStats // 下流ノードが報告した視聴者数・リレー数。TotalListeners / TotalRelays の合算に使う
 }
 ```
 
@@ -258,27 +287,39 @@ func (c *Channel) Info() ChannelInfo
 func (c *Channel) Track() TrackInfo
 func (c *Channel) SetInfo(info ChannelInfo)   // 更新後に全 outputs へ NotifyInfo()
 func (c *Channel) SetTrack(track TrackInfo)   // 更新後に全 outputs へ NotifyTrack()
-func (c *Channel) SetHeader(data []byte)      // buffer 更新後に全 outputs へ NotifyHeader()
+func (c *Channel) SetHeader(data []byte, pos uint32) // buffer 更新後に全 outputs へ NotifyHeader() (同一内容なら no-op)
 func (c *Channel) Write(data []byte, pos uint32, contFlags byte)
+func (c *Channel) UpstreamNodeInfo() (pcp.GnuID, uint32, uint16)
+func (c *Channel) SetUpstreamNodeInfo(sessionID pcp.GnuID, ip uint32, port uint16)
 // ContentBuffer 委譲メソッド
 func (c *Channel) HasData() bool
 func (c *Channel) Header() ([]byte, uint32)
 func (c *Channel) Signal() <-chan struct{}
 func (c *Channel) Since(pos uint32) []Content
+func (c *Channel) PacketsAfter(ref Content) []Content
+func (c *Channel) ContentPosition() uint32
 func (c *Channel) OldestPos() uint32
 func (c *Channel) NewestPos() uint32
 // OutputStream 管理
 func (c *Channel) AddOutput(o OutputStream)
 func (c *Channel) TryAddOutput(o OutputStream, maxRelays, maxListeners int) bool
+func (c *Channel) MakeRelayable(maxRelays int) bool // firewalled な下流を 1 つ切断して枠を空ける
 func (c *Channel) RemoveOutput(o OutputStream)
 func (c *Channel) NumListeners() int
 func (c *Channel) NumRelays() int
+func (c *Channel) TotalListeners() int         // 自ノード + 下流ノード報告値
+func (c *Channel) TotalRelays() int
+func (c *Channel) UpdateNodeStats(sessionID pcp.GnuID, listeners, relays int)
+func (c *Channel) RemoveNodeStats(sessionID pcp.GnuID)
 func (c *Channel) IsRelayFull(maxRelays int) bool
 func (c *Channel) IsDirectFull(maxListeners int) bool
 func (c *Channel) CloseAll()                  // 全接続に Close() を呼ぶ
 func (c *Channel) UptimeSeconds() uint32
 func (c *Channel) Connections() []ConnectionInfo
+func (c *Channel) RelayNodes() []RelayNodeEntry // 下流 PCP ピアの一覧 (getChannelRelayTree 用)
 func (c *Channel) CloseConnection(id int) bool
+func (c *Channel) AddKnownHost(host *pcp.Atom)
+func (c *Channel) SelectSourceHosts(max int) []*pcp.Atom
 func (c *Channel) Broadcast(from OutputStream, atom *pcp.Atom) // BcstForwarder 型アサーションで転送
 ```
 
@@ -290,48 +331,69 @@ func (c *Channel) Broadcast(from OutputStream, atom *pcp.Atom) // BcstForwarder 
 
 ### 接続フロー
 
-`connect()` が TCP 接続を確立し、`handshake()` がプロトコルハンドシェイクを処理する。
+`Run()` が接続先選択と再接続ループを回し、`connectTo()` が 1 接続分の TCP 接続〜切断を担当する。
 
 ```
-connect():
-  1. TCP 接続 (upstreamAddr = "host:port")
-  2. handshake() を呼び出し
+Run():
+  1. selectSourceHost() で接続先を決める
+     (学習済み HOST 候補を PeerCastStation 互換のスコアで選択、なければ tracker)
+  2. connectTo(addr) → 終了理由 (Error / Unavailable / OffAir) に応じて次を決める
+     - Unavailable (quit 1003) → その host を 3 分無視して即座に次の候補へ
+     - Error / OffAir (非 tracker) → その host を 3 分無視して即座に次の候補へ
+     - Error / OffAir (tracker)   → Run 終了
+     - 候補なし                   → Run 終了
+  3. Run 終了時: Channel.CloseAll() → doneCh close → onStopped (Manager.Stop で削除)
+
+connectTo():
+  1. DialContext で TCP 接続 (10 秒タイムアウト、Stop で中断可能)
+  2. handshake()
+  3. HTTP 503 なら processHosts() で HOST / quit だけ受け取って戻る
+  4. HTTP 200 なら bcstHostLoop goroutine を起動し processBody() で受信
+  5. 切断時に quit(QUIT+SHUTDOWN) を best-effort で送信
 
 handshake():
   1. HTTP GET /channel/<channelIdHex> HTTP/1.0 を送信
+       x-peercast-pcp: 1
+       x-peercast-pos: Channel.ContentPosition()   (途中から再開)
   2. helo アトム送信
-       agnt = "peercast-mi/<version>"
+       agnt = "PeerCast-MI/<version>"
        sid  = SessionID
        ver  = 1218
        port = listenPort
      ※ pcp\n magic は HTTP-upgraded /channel/ リクエストでは送信しない
-  3. HTTP/1.0 200 OK レスポンス (ヘッダー部のみ) を読み捨て
-  4. oleh アトム受信
+  3. HTTP ステータス行 + ヘッダーを読む (200 / 503 以外はエラー)
+  4. oleh アトム受信 (quit なら終了理由に変換)
+     → oleh.sid と接続先 IP:port を Channel.SetUpstreamNodeInfo() に記録
 
-connect() (続き):
-  3. bcstHostLoop goroutine を起動 (定期的に BCST HOST アトムを上流に送信)
-  4. receiveLoop() でストリームデータ受信
+processBody():
      - chan > pkt(type="head") → Channel.SetHeader()
      - chan > pkt(type="data") → Channel.Write()
-     - chan > info / trck → Channel.SetInfo() / Channel.SetTrack()
-     - host アトム → リレーホスト候補として収集 (503 再接続用)
-     - quit アトム受信 → 接続切断・再接続
-  5. タイムアウト (60 秒) で quit なく無音 → 接続切断・再接続
+     - chan > info / trck / bcid → Channel.SetInfo() / SetTrack() / SetBroadcastID()
+     - host アトム、bcst 内の host → SourceNodeList に候補として蓄積
+     - bcst 内の chan → 上と同じ処理
+     - ok → 無視
+     - quit アトム受信 → 終了理由に変換して戻る
+     - 60 秒無音 → 読み取りタイムアウトでエラー終了
+
+bcstHostLoop():
+     - 接続直後、120 秒ごと、および視聴者数/リレー数が変化した時 (5 秒ごとに確認) に
+       BCST(grp=TRACKERS) > HOST を上流に送る
 ```
 
 ### 再接続
 
-接続失敗・切断時は指数バックオフ (初期 5 秒、最大 120 秒) で再接続する。`Stop()` が呼ばれると再接続ループを終了する。
+バックオフはなく、上記のとおり候補ホストへ即時に接続し直す (PeerCastStation 互換。詳細は [decisions/peercaststation-compat.md](../decisions/peercaststation-compat.md))。`Stop()` が呼ばれると context をキャンセルし、接続中の Dial / 読み取りを中断して Run() を終了させる。
 
-Channel オブジェクトは再接続をまたいで維持されるため、下流の PCP リレー接続・HTTP 視聴接続は継続する。ただし、ヘッダーが再送されるまでの間は下流ノードは待機状態になる。
+ホスト切り替えの間は Channel オブジェクトが維持されるため、下流の PCP リレー接続・HTTP 視聴接続は継続する。ただし、ヘッダーが再送されるまでの間は下流ノードは待機状態になる。Run() が終了 (候補枯渇・tracker 停止) した場合は全出力を閉じ、`onStopped` 経由で Manager から削除される。
 
 ### API
 
 ```go
-func New(upstreamAddr string, channelID, sessionID pcp.GnuID, listenPort uint16, ch *channel.Channel) *Client
-func (c *Client) Run()            // 再接続ループ。goroutine として呼ぶ
-func (c *Client) Stop()           // 停止シグナルを送り、Run() の終了を待つ
-func (c *Client) SetGlobalIP(ip uint32) // YP から取得した globalIP を設定
+func New(trackerAddr string, channelID, sessionID pcp.GnuID, listenPort uint16, ch *channel.Channel) *Client
+func (c *Client) Run()                    // 再接続ループ。goroutine として呼ぶ
+func (c *Client) Stop()                   // context をキャンセルし、Run() の終了を待つ
+func (c *Client) SetGlobalIP(ip uint32)   // YP から取得した globalIP を設定 (接続先選択と BCST HOST に使う)
+func (c *Client) SetOnStopped(fn func())  // Run() 終了後に呼ばれるフック (Run 開始前に設定)
 ```
 
 ---
@@ -346,31 +408,41 @@ YP (root server) に PCP コントロール接続 (COUT) を確立し、チャ�
 1. TCP 接続 (YP のホスト:ポート)
 2. "pcp\n" アトム + バージョン送信  ← pcp.Dial が自動処理
 3. helo 送信
-     agnt = "peercast-mi/<version>"
+     agnt = "PeerCast-MI/<version>"
      ver  = 1218
      sid  = SessionID
-     port = 7144
+     port = listenPort (peercast_port)
+     ping = listenPort (YP からのファイアウォール疎通確認を受ける)
      bcid = BroadcastID
-4. oleh 受信 → rip から globalIP を取得
+4. oleh 受信 → rip から globalIP を取得し OnGlobalIP を呼ぶ
 5. root アトム受信 (任意)
      root.uint: 更新間隔 (秒)。受信した値で updateInterval を上書き
-     root.upd : 即時更新要求 → 次の bcst 送信を前倒し
+     root.upd : 即時更新要求
 6. ok 受信 → ハンドシェイク完了
-7. 初回 bcst 送信
-8. updateInterval ごとに bcst を繰り返し送信
-9. 配信終了時: quit(QUIT+SHUTDOWN) 送信
+7. ブロードキャスト中のチャンネルが 1 つもなければ quit(QUIT+SHUTDOWN) を送って切断
+   (リレー専用ノードは globalIP を知るためだけに接続する)
+8. 初回 bcst 送信 (ブロードキャストチャンネルごとに 1 つ)
+9. updateInterval ごとに bcst を繰り返し送信
+   - YP からの root(upd) 受信時、および bumpChannel (Bump()) 時は即時送信
+   - YP からの quit 受信・読み取りエラーで切断 → 再接続
+10. 停止時: quit(QUIT+SHUTDOWN) 送信
 ```
+
+接続の開始条件 (`shouldConnect`): チャンネルが 1 つ以上存在し、かつ globalIP 未取得またはブロードキャスト中のチャンネルがある場合。
 
 ### bcst の構造
 
 ```
 bcst
-  ttl  = 7
+  ttl  = 11
   hops = 0
   from = SessionID
   grp  = 0x01  (ROOT のみ)
   cid  = ChannelID
   vers = 1218
+  vrvp = 27
+  vexp = "MI"
+  vexn = <バージョン番号>
   chan
     id   = ChannelID
     bcid = BroadcastID
@@ -387,22 +459,28 @@ bcst
       crea = TrackInfo.Creator
       url  = TrackInfo.URL
       albm = TrackInfo.Album
-  host
+  host  (pcputil.BuildHostAtom で構築)
     id   = SessionID
-    ip   = globalIP  (oleh.rip から取得)
-    port = 7144
-    numl = Channel.NumListeners()
-    numr = Channel.NumRelays()
+    ip   = globalIP  (oleh.rip から取得)   ← 1 組目 (global)
+    port = listenPort
+    ip   = localIP   (YP 接続のローカル側) ← 2 組目 (LAN)
+    port = listenPort
+    numl = Channel.TotalListeners()
+    numr = Channel.TotalRelays()
     uptm = 稼働秒数
     oldp = Channel.OldestPos()
     newp = Channel.NewestPos()
     cid  = ChannelID
-    flg1 = TRACKER | RELAY | DIRECT | RECV | CIN  (0x37)
-    trkr = 1
+    flg1 = TRACKER | CIN
+           | RECV   (Channel.HasData() のとき)
+           | RELAY  (IsRelayFull(max_relays) でないとき)
+           | DIRECT (IsDirectFull(max_listeners) でないとき)
     ver  = 1218
     vevp = 27
-    vexp = "MM"
+    vexp = "MI"
     vexn = <バージョン番号>
+    trkr = 1
+    upip / uppt = 上流アドレス (リレーチャンネルのみ)
 ```
 
 ### 再接続
@@ -419,15 +497,26 @@ bcst
 
 ### プロトコル識別
 
-先頭 16 バイトを peek して判定する (接続は消費しない)。
+先頭 64 バイトを peek して判定する (接続は消費しない。`GET /channel/<32hex>` を 1 回の peek で切り出すため)。
 
 | 先頭バイト列 | 処理 |
 |:---|:---|
-| `"GET /channel/"` | PCPOutputStream を生成 |
+| `"GET /channel/"` | PCPOutputStream を生成 (admission 判定 → handshake → streaming) |
 | `"GET /stream/"` | HTTPOutputStream を生成 |
+| `"GET /pls/"` | M3U プレイリストを返す。チャンネル未登録で `?tip=host:port` があれば `OnDemandRelay` でリレーを開始 |
 | `"pcp\n"` (0x70 0x63 0x70 0x0a) | `handlePing()` — YP ファイアウォール疎通確認 |
-| `"POST /api"` | JSON-RPC API ハンドラーへ転送 |
+| `"POST /api"` / `"OPTIONS /api"` | JSON-RPC API ハンドラーへ転送 (OPTIONS は CORS preflight) |
 | その他 | 不明プロトコル → 切断 |
+
+### 接続数制限 (admission)
+
+`admitMu` で直列化し、以下を順に確認する。いずれかに引っかかれば拒否する。
+
+1. `max_relays_total` (全チャンネル合計のリレー数)
+2. `max_upstream_kbps` (全チャンネル合計の送信レート)
+3. per-channel: `Channel.TryAddOutput(o, max_relays, max_listeners)`
+
+PCP リレーは handshake 前に `canAdmitRelay` で判定して HTTP 200/503 を決め (満杯時は `Channel.MakeRelayable` で firewalled な下流の退出を試みる)、handshake 後にもう一度 `tryAdmit` で確定する。
 
 ---
 
@@ -437,32 +526,45 @@ bcst
 
 ### 接続受け付けフロー
 
-`run()` が全体フローを制御し、`handshake()` / `sendInitial()` / `streamLoop()` に分離されている。
+`Listener.handlePCPRelay()` が全体フローを制御し、`handshake()` / `sendRelayDenied()` / `runStreaming()` (→ `sendInitial()` + `readLoop()` + `streamLoop()`) に分離されている。
 
 ```
-run():
-  1. handshake() — ハンドシェイク処理
-  2. sendInitial() — 初期チャンネル情報送信
-  3. readLoop() goroutine を起動 (下流からの bcst/quit 読み取り)
-  4. streamLoop() — ストリームデータ送信ループ
+Listener.handlePCPRelay():
+  1. チャンネル未登録、またはデータ未受信 (HasData() == false) → HTTP 404 で切断
+  2. canAdmitRelay() で受け入れ可否を先に判定 (HTTP 200 / 503 の決定に使う)
+  3. handshake(admitted)
+  4. 拒否 (503) の場合: sendRelayDenied() → 切断
+       自ノードの host アトム → 代替候補 host アトム最大 8 件 (SelectSourceHosts) → quit(QUIT+UNAVAILABLE)
+  5. tryAdmit() で Channel に登録 (handshake 中に枠が埋まっていれば 4 と同じく拒否)
+  6. runStreaming(startPos)
 
-handshake():
+handshake(admitted):
+  0. 全体に 18 秒のデッドラインを設定
   1. HTTP GET /channel/<channel-id> を受け取る
      (x-peercast-pcp: 1, x-peercast-pos: <位置> などのヘッダーを含む場合がある)
-  2. HTTP/1.0 200 OK レスポンス送信
+  2. HTTP/1.0 200 OK (admitted) または 503 Unavailable レスポンス送信
      Content-Type: application/x-peercast-pcp
      ※ PCP over HTTP では pcp\n マジックは送受信しない
   3. helo アトム受信・バリデーション
      - sid == 自分の SessionID → quit(QUIT+LOOPBACK)
      - sid == ゼロ             → quit(QUIT+NOTIDENTIFIED)
-     - ver < 1200             → quit(QUIT+BADAGENT)
+     - ver == 0 / ver < 1200  → quit(QUIT+BADAGENT)
   4. ping (ファイアウォール疎通確認) — helo に ping フィールドがあれば実行
+     - 接続元がサイトローカル (10/8, 172.16/12, 192.168/16, 169.254/16) なら成功しても port = 0 扱い
+     - ping がなく port フィールドがあればその値を信用する
   5. oleh アトム送信
-       agnt = "peercast-mi/<version>"
+       agnt = "PeerCast-MI/<version>"
        sid  = SessionID
        ver  = 1218
        rip  = 接続元の IPv4 アドレス (uint32, big-endian で組み立て)
-       port = ping 成功時のポート番号
+       port = ping 成功時のポート番号 (0 = firewalled)
+  6. admitted のときのみ ok(1) を送信
+
+runStreaming():
+  1. sendInitial()
+  2. readLoop() goroutine を起動 (下流からの bcst/quit 読み取り)
+  3. streamLoop(startPos)
+  4. 終了時: 下流ノードの nodeStats を削除し接続を閉じる
 
 sendInitial():
   1. chan アトム送信
@@ -474,14 +576,24 @@ sendInitial():
 streamLoop():
   1. drainNotifications() — 非ブロッキングで info/track/header/bcst 通知を処理
   2. sendDataPackets() — Channel.Since(pos) で未送信パケットを送信
+     - 最古の未送信パケットが 5 秒以上前のものなら Overflow とみなし quit(QUIT+SKIP) で切断
+     - 15KB を超えるパケットは分割し、2 個目以降に Fragment (0x01) フラグを OR する
   3. 送信待ちがなければ Signal() / 通知チャネル / stallTimer を select
-     - 5 秒以上データが送れない場合 → 接続を切断
-     - infoCh 通知時: chan > info を送信
-     - trackCh 通知時: chan > trck を送信
+     - 5 秒以上データが来ない場合 → 接続を切断 (quit なし)
+     - infoCh 通知時: chan > info を送信 (ブロードキャストチャンネルなら bcst でラップ)
+     - trackCh 通知時: chan > trck を送信 (同上)
      - headerCh 通知時: chan > pkt(type=head) を送信
      - bcstCh: bcst アトムを下流に転送
-  4. 終了: quit(QUIT+SHUTDOWN) 送信
+     - closeCh (readLoop からの quit / Close()): 上流ノード情報を host アトムで送ってから quit(QUIT+SHUTDOWN)
 ```
+
+### x-peercast-pos による開始位置
+
+- `reqPos == 0` (未指定): ヘッダー位置から開始
+- `reqPos >= OldestPos()`: その位置から開始
+- `reqPos < OldestPos()` (古すぎる): `OldestPos()` から開始
+
+いずれの場合も最初のキーフレーム (`ContFlags == 0`) まではスキップする。
 
 ### data パケットの形式
 
@@ -502,7 +614,9 @@ chan
 - `ttl` が 0 なら転送しない
 - 転送時に `ttl -= 1`、`hops += 1`
 - `from` が自分の SessionID なら転送しない (ループ防止)
-- `dest` が特定の SessionID を指す場合はそのノードにのみ転送
+- `dest` が自分の SessionID なら転送しない (宛先が自分)
+- 転送先は同一チャンネルの他の PCP 出力ストリーム。送信元と同じ `PeerID()` を持つ接続は除く
+- bcst 内に `host` があれば `Channel.AddKnownHost` (代替候補) と `UpdateNodeStats` (下流の視聴者/リレー数) に反映
 
 ---
 
@@ -514,11 +628,12 @@ chan
 
 ```
 1. HTTP GET /stream/<channel-id> を受け取る
+   (Listener 側で tryAdmit に失敗した場合はレスポンスなしで切断)
 
-2. Channel.HasData() を確認
-   データなし → Signal() で最大 30 秒待機、タイムアウトなら終了
+2. 読み取り監視 goroutine を起動 (プレイヤー切断をデータ送信がない間も検知する)
 
-3. HTTP/1.0 200 OK レスポンス送信
+3. HTTP/1.0 200 OK レスポンスを即座に送信
+   (リレー確立待ちの間にプレイヤーがタイムアウトしないよう、データ到着前に返す)
    Content-Type: <ChannelInfo.MIMEType> (デフォルト "video/x-flv")
    icy-name:    sanitizeHeaderValue(ChannelInfo.Name)
    icy-genre:   sanitizeHeaderValue(ChannelInfo.Genre)
@@ -526,17 +641,22 @@ chan
    icy-bitrate: <ChannelInfo.Bitrate>
    ※ sanitizeHeaderValue() で CR/LF を除去し HTTP ヘッダーインジェクションを防止
 
-4. Channel.Header() を送信
+4. Channel.HasData() を確認
+   データなし → Signal() で最大 30 秒待機、タイムアウトなら終了
 
-5. キーフレームを起点にストリームデータを連続送信
+5. Channel.Header() を送信
+
+6. キーフレームを起点にストリームデータを連続送信
+   - Channel.PacketsAfter(sent) で最後に送った Content より新しいものだけを取る
    - ContFlags != 0 のパケット (= 非キーフレーム) をスキップ
    - キーフレーム以降は全パケットを順次送信
    - 書き込みタイムアウト: 60 秒 (パケットごとに更新)
    - Channel.Signal() でデータ到着を待機
+   - headerCh 通知時: 新ヘッダーを書き込み、sent と keyframe 待ち状態をリセットして継続
 ```
 
 > **注意**: HTTPOutputStream は `BcstForwarder` インターフェースを実装しない。
-> メタデータ通知 (`infoCh`、`trackCh`、`headerCh`) も受け取らない。
+> `infoCh` / `trackCh` の通知は受け取るが無視する (`headerCh` のみ処理する)。
 > ICY メタデータ (`icy-metaint`) は現在未実装。
 
 ---
@@ -552,6 +672,7 @@ chan
 type ChannelManager interface {
     IssueStreamKey(accountName, streamKey string) error
     RevokeStreamKey(accountName string) bool
+    ListStreamKeys() []channel.StreamKeyEntry
     Broadcast(streamKey string, info channel.ChannelInfo, track channel.TrackInfo) (*channel.Channel, error)
     Stop(channelID pcp.GnuID) bool
     GetByID(channelID pcp.GnuID) (*channel.Channel, bool)
@@ -562,6 +683,17 @@ type ChannelManager interface {
 
 ### アクセス制御
 
-`isLocalhost()` でリモートアドレスを検査し、ループバックアドレス以外からのリクエストには Basic 認証 (`admin_user` / `admin_pass`) を要求する。
+`isLocalhost()` でリモートアドレスを検査し、ループバックアドレス以外からのリクエストには Basic 認証 (`admin_user` / `admin_pass`) を要求する。ループバックからのリクエストは認証なしで通す。
 
-API の詳細仕様 (メソッド一覧・リクエスト/レスポンス形式・フィールド説明) は [docs/api/jsonrpc.md](api/jsonrpc.md) を参照。
+### CORS
+
+ループバックからの要求は無認証なので、ブラウザ上の任意のページが利用者のブラウザ経由で API を叩けないよう、`Origin` ヘッダー付きの要求はオリジンを検査する。
+
+- `Origin` なし (curl 等・同一オリジン): CORS ヘッダーを付けずに処理
+- ループバックのオリジン (`http://localhost:*`, `http://127.0.0.1:*`, `http://[::1]:*`): 許可 (Web UI の dev サーバー用)
+- `allowed_origins` に列挙されたオリジン: 許可
+- それ以外: `OPTIONS` / `POST` ともに 403 で拒否
+
+許可したオリジンにはワイルドカードではなくそのオリジンを `Access-Control-Allow-Origin` に返し、`Vary: Origin` を付ける。
+
+API の詳細仕様 (メソッド一覧・リクエスト/レスポンス形式・フィールド説明) は [api/jsonrpc.md](api/jsonrpc.md) を参照。
