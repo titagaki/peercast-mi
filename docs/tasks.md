@@ -10,7 +10,8 @@
 ### 互換性・検証
 
 - [ ] peercast-yt から移行したとき同じ ChannelID を保つ必要があるかを判断する。必要なら StreamKey の連結をやめる (または StreamKey が空なら連結しない) 設計変更を ADR に記録する — [decisions/0001](decisions/0001-channel-id-algorithm.md) 検証済み: アルゴリズム自体は peercast-yt と一致するが入力が異なる。PeerCastStation は別方式 (SHA512+MD5) なので一致しない
-- [ ] `x-peercast-pos` で `reqPos == 0` を「未指定」と同一視している点の妥当性確認 — [decisions/0002](decisions/0002-x-peercast-pos-resume.md)
+
+- [ ] ストリーム位置 (uint32) が 4 GiB で一周したときの扱い — `ContentBuffer.Since` / `OldestPos` / `streamLoop` の `reqPos >= oldest` が素の uint32 比較なので、一周をまたぐ再接続や `Since` で挙動が怪しい可能性がある。PeerCastStation は内部 `long` で持ち送信時に `& 0xFFFFFFFF` でマスクする (`PCPOutputStream.cs` CreateContentBodyPacket)
 
 ### 機能
 
@@ -34,6 +35,7 @@
 
 ## 完了
 
+- [x] 2026-09-14 `x-peercast-pos` の `reqPos == 0` を「未指定」と同一視する点の妥当性確認 — 変更不要。PeerCastStation・peercast-yt とも実質同じ扱い ([decisions/0002](decisions/0002-x-peercast-pos-resume.md) に検証結果を追記)
 - [x] 2026-09-14 `/stream/<id>[.flv]?tip=` での自動リレー開始 (peca-live 互換) と、リレー初回ヘッダーの二重送信バグ修正 — [decisions/0014](decisions/0014-stream-on-demand-relay.md)
 - [x] 2026-09-13 `bumpChannel` の名前指定 params 対応 (peca-live 互換) — [decisions/0010](decisions/0010-bump-channel-named-params.md)
 - [x] 2026-09-13 エンコーダーが `broadcastChannel` より先に接続すると FLV ヘッダーが載らないバグ — `internal/rtmp/server.go` (`headerAppliedTo`)

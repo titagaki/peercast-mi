@@ -21,8 +21,11 @@
 
 - 再接続した下流に重複データを送らずに済む
 - `reqPos == 0` を「未指定」と同一視しているので、本当に位置 0 を要求された場合と区別できない。ストリーム開始直後は `hpos == 0` なので実害はない
+- 2026-09-14 検証済み (変更不要): PeerCastStation は未指定を -1、指定を整数値として区別して保持するが、使う側は `AddContentSink` の `header.Position >= requestPos || content.Position >= requestPos` だけで、位置は非負なので -1 でも 0 でも「ヘッダー以降を全部送る」になり挙動は同じ。しかも PeerCastStation の下流は常に `x-peercast-pos:{Channel.ContentPosition}` を送り、ヘッダー未受信時の `ContentPosition` は 0 なので初回接続で 0 を送ってくる。これを「持っているものを全部」と読むのが正しい。peercast-yt は `unsigned int reqPos = 0; if (reqPos)` で peercast-mi と同じ。位置が uint32 で一周してちょうど 0 になる瞬間だけ「再開」ではなく「ヘッダーから」になるが、重複が少し出る程度で実害はない
 
 ## 参照
 
 - `internal/servent/pcp.go` (`handshake`, `streamLoop`)
+- PeerCastStation `PeerCastStation.PCP/OwinContextExtensions.cs` (`GetPCPPos`), `PCPOutputStream.cs` (`requestPos`), `PeerCastStation.Core/Channel.cs` (`AddContentSink`, `ContentPosition`), `PCPSourceStream.cs` (relay request)
+- peercast-yt `core/common/servent.cpp` (`handshakeStream`)
 - [spec/components.md 4.8](../spec/components.md)
