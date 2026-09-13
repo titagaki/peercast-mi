@@ -280,41 +280,80 @@ func (o *PCPOutputStream) buildHostAtom() *pcp.Atom {
 	})
 }
 
-// streamLoop continuously sends buffered content packets to the peer.
-// reqPos は x-peercast-pos で指定された開始位置 (0 = ヘッダー位置から開始)。
-func (o *PCPOutputStream) streamLoop(reqPos uint32) {
+// streamCursor is streamLoop's sending state: the next stream position to
+// send and whether non-keyframes are still being skipped.
+type streamCursor struct {
+	pos                uint32
+	waitingForKeyframe bool
+}
+
+// startCursor picks the position to start sending from. reqPos は
+// x-peercast-pos で指定された開始位置 (0 = 未指定)。
+//
+// Unspecified: everything buffered (the oldest packet; SetHeader clears the
+// buffer, so that is everything since the header), or the header position
+// when nothing is buffered yet. The header position itself is not used
+// while packets exist because legacy upstreams keep resending the same
+// header, whose position then drifts arbitrarily far behind the data.
+//
+// Specified: positions wrap at 2^32 (channel.PosBefore), so a reqPos that
+// falls outside the buffer is clamped: behind the oldest packet → resend
+// from the oldest; ahead of the newest → skip the backlog and continue from
+// the newest end (peercast-yt 互換: findOldestPos は [safePos, lastPos] に
+// 丸める。PeerCastStation も requestPos より前のバックログを送らないだけで、
+// 以降のデータはそのまま流す)。
+func (o *PCPOutputStream) startCursor(reqPos uint32) streamCursor {
 	_, hpos := o.ch.Header()
-	pos := hpos
-	// reqPos == 0 は「未指定」と同義に扱う。ストリーム開始直後に pos=0 を送ってくる
-	// クライアントがいても hpos == 0 のはずなので実害はない。
-	if reqPos > 0 {
-		oldest := o.ch.OldestPos()
-		if reqPos >= oldest {
-			pos = reqPos
-		} else {
-			pos = oldest
-		}
+	cur := streamCursor{pos: hpos, waitingForKeyframe: true}
+	if !o.ch.HasData() {
+		return cur
 	}
+	oldest := o.ch.OldestPos()
+	newestEnd := o.ch.ContentPosition()
+	switch {
+	case reqPos == 0, channel.PosBefore(reqPos, oldest):
+		cur.pos = oldest
+	case channel.PosBefore(newestEnd, reqPos):
+		cur.pos = newestEnd
+	default:
+		cur.pos = reqPos
+	}
+	return cur
+}
+
+// streamLoop continuously sends buffered content packets to the peer.
+func (o *PCPOutputStream) streamLoop(reqPos uint32) {
+	cur := o.startCursor(reqPos)
 
 	stallTimer := time.NewTimer(outputQueueTimeout)
 	defer stallTimer.Stop()
-	waitingForKeyframe := true
 
 	for {
 		// Process notifications non-blockingly.
-		if err := o.drainNotifications(); err != nil {
+		if err := o.drainNotifications(&cur); err != nil {
 			slog.Debug("pcp: notification write error, closing", "remote", o.remoteAddr, "id", o.id, "err", err)
 			return
 		}
 
 		// Send buffered data packets.
 		sigCh := o.ch.Signal()
-		packets := o.ch.Since(pos)
+		packets := o.ch.Since(cur.pos)
 
 		if len(packets) > 0 {
-			var err error
-			pos, waitingForKeyframe, err = o.sendDataPackets(packets, pos, waitingForKeyframe)
-			if err != nil {
+			// A header change between drainNotifications and Since means
+			// packets belong to the new stream: send the header first and
+			// re-read from the new position rather than leaking new data
+			// behind the old header.
+			select {
+			case <-o.headerCh:
+				if err := o.sendHeaderUpdate(&cur); err != nil {
+					slog.Debug("pcp: header write error, closing", "remote", o.remoteAddr, "id", o.id, "err", err)
+					return
+				}
+				continue
+			default:
+			}
+			if err := o.sendDataPackets(&cur, packets); err != nil {
 				return
 			}
 			stallTimer.Reset(outputQueueTimeout)
@@ -344,7 +383,7 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 				return
 			}
 		case <-o.headerCh:
-			if err := o.sendHeaderUpdate(); err != nil {
+			if err := o.sendHeaderUpdate(&cur); err != nil {
 				slog.Debug("pcp: header write error, closing", "remote", o.remoteAddr, "id", o.id, "err", err)
 				return
 			}
@@ -360,27 +399,27 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 	}
 }
 
-// sendDataPackets writes buffered content packets to the downstream peer.
-// It skips non-keyframe packets until the first keyframe is found.
-// Returns the updated stream position, keyframe state, and any write error.
-func (o *PCPOutputStream) sendDataPackets(packets []channel.Content, pos uint32, waitingForKeyframe bool) (uint32, bool, error) {
+// sendDataPackets writes buffered content packets to the downstream peer and
+// advances cur. It skips non-keyframe packets until the first keyframe is
+// found.
+func (o *PCPOutputStream) sendDataPackets(cur *streamCursor, packets []channel.Content) error {
 	// Overflow detection: if the oldest unsent packet was written > 5s ago,
 	// the downstream is too slow (PeerCastStation 互換).
 	if !packets[0].Timestamp.IsZero() && time.Since(packets[0].Timestamp) > outputQueueTimeout {
 		slog.Info("pcp: send overflow, closing", "remote", o.remoteAddr, "id", o.id,
 			"delay", time.Since(packets[0].Timestamp))
 		o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorSkip)
-		return pos, waitingForKeyframe, fmt.Errorf("overflow")
+		return fmt.Errorf("overflow")
 	}
 	if len(packets) > 10 {
-		slog.Debug("pcp: sending burst", "remote", o.remoteAddr, "id", o.id, "packets", len(packets), "pos", pos)
+		slog.Debug("pcp: sending burst", "remote", o.remoteAddr, "id", o.id, "packets", len(packets), "pos", cur.pos)
 	}
 	for _, pkt := range packets {
-		if waitingForKeyframe && pkt.ContFlags != 0 {
-			pos = pkt.Pos + uint32(len(pkt.Data))
+		if cur.waitingForKeyframe && pkt.ContFlags != 0 {
+			cur.pos = pkt.Pos + uint32(len(pkt.Data))
 			continue
 		}
-		waitingForKeyframe = false
+		cur.waitingForKeyframe = false
 
 		// Split large packets into maxContentBodyLen chunks.
 		// The first chunk keeps the original ContFlags; subsequent chunks
@@ -405,7 +444,7 @@ func (o *PCPOutputStream) sendDataPackets(packets []channel.Content, pos uint32,
 			o.conn.SetWriteDeadline(time.Now().Add(pcpWriteTimeout))
 			if err := atom.Write(o.conn); err != nil {
 				slog.Debug("pcp: write error, closing", "remote", o.remoteAddr, "id", o.id, "pos", chunkPos, "err", err)
-				return pos, waitingForKeyframe, err
+				return err
 			}
 			o.conn.SetWriteDeadline(time.Time{})
 			data = data[len(chunk):]
@@ -415,14 +454,14 @@ func (o *PCPOutputStream) sendDataPackets(packets []channel.Content, pos uint32,
 			// InterFrame/AudioFrame などの元フラグが失われる。
 			contFlags = pkt.ContFlags | 0x01
 		}
-		pos = pkt.Pos + uint32(len(pkt.Data))
+		cur.pos = pkt.Pos + uint32(len(pkt.Data))
 	}
-	return pos, waitingForKeyframe, nil
+	return nil
 }
 
 // drainNotifications processes any pending info/track/header/bcst notifications
 // without blocking. Returns an error if any write fails.
-func (o *PCPOutputStream) drainNotifications() error {
+func (o *PCPOutputStream) drainNotifications(cur *streamCursor) error {
 	for {
 		select {
 		case <-o.infoCh:
@@ -434,7 +473,7 @@ func (o *PCPOutputStream) drainNotifications() error {
 				return err
 			}
 		case <-o.headerCh:
-			if err := o.sendHeaderUpdate(); err != nil {
+			if err := o.sendHeaderUpdate(cur); err != nil {
 				return err
 			}
 		case atom := <-o.bcstCh:
@@ -492,8 +531,15 @@ func (o *PCPOutputStream) wrapBcstIfBroadcasting(chanAtom *pcp.Atom) *pcp.Atom {
 	return pcp.NewParentAtom(pcp.PCPBcst, children...)
 }
 
-func (o *PCPOutputStream) sendHeaderUpdate() error {
+// sendHeaderUpdate sends the current stream header and restarts cur from
+// it. SetHeader has cleared the ring buffer and the new stream's positions
+// may have rewound (encoder reconnect, upstream switch), so continuing from
+// the old position would either starve or skip the new data
+// (peercast-yt 互換: streamIndex が変わると streamPos = headPack.pos)。
+func (o *PCPOutputStream) sendHeaderUpdate(cur *streamCursor) error {
 	header, hpos := o.ch.Header()
+	cur.pos = hpos
+	cur.waitingForKeyframe = true
 	atom := (&pcp.ChanPacket{
 		ID: o.ch.ID,
 		Pkt: &pcp.ChanPktData{

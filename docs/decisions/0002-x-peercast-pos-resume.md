@@ -15,6 +15,8 @@
 - `reqPos < OldestPos()` (バッファから溢れている): `OldestPos()` から開始
 - いずれの場合も最初のキーフレーム (`ContFlags == 0`) までは送らない
 
+丸めの規則は [0015](0015-stream-position-wrap.md) で更新した (一周を考慮した比較、未指定は最古パケットから、バッファより先なら最新末尾から)。現在の規則は spec/components.md 4.8 を参照。
+
 自ノードが上流に再接続するときも `Channel.ContentPosition()` を送る (peercaststation-compat.md 参照)。
 
 ## 結果・影響

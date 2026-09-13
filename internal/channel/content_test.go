@@ -264,3 +264,77 @@ func TestContentBuffer_ConcurrentWriteRead(t *testing.T) {
 
 	wg.Wait()
 }
+
+// TestPosBefore はストリーム位置の比較が 2^32 の一周をまたいでも正しいことを確認する。
+func TestPosBefore(t *testing.T) {
+	for _, tc := range []struct {
+		a, b uint32
+		want bool
+	}{
+		{0, 1, true},
+		{1, 0, false},
+		{5, 5, false},
+		{0xFFFFFF00, 0x00000100, true},  // a は一周する直前、b は直後
+		{0x00000100, 0xFFFFFF00, false}, // 逆
+		{0, 0x7FFFFFFF, true},           // 2^31 未満の前方
+		{0x80000000, 0, true},           // 2^31 以上先は「後ろ」とみなす
+	} {
+		if got := PosBefore(tc.a, tc.b); got != tc.want {
+			t.Errorf("PosBefore(%#x, %#x) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// TestContentBuffer_Since_Wrap は位置が一周した直後の Since が、一周前の
+// パケットを返し直したり一周後のパケットを落としたりしないことを確認する。
+func TestContentBuffer_Since_Wrap(t *testing.T) {
+	var b ContentBuffer
+	b.Write(make([]byte, 0x100), 0xFFFFFE00, 0)
+	b.Write(make([]byte, 0x100), 0xFFFFFF00, 0x02)
+	b.Write(make([]byte, 0x100), 0x00000000, 0x02) // 一周
+	b.Write(make([]byte, 0x100), 0x00000100, 0x02)
+
+	for _, tc := range []struct {
+		pos  uint32
+		want []uint32
+	}{
+		{0xFFFFFE00, []uint32{0xFFFFFE00, 0xFFFFFF00, 0, 0x100}},
+		{0xFFFFFF00, []uint32{0xFFFFFF00, 0, 0x100}},
+		{0x00000000, []uint32{0, 0x100}}, // 一周前のパケット (0xFFFF....) を返さない
+		{0x00000100, []uint32{0x100}},
+		{0x00000200, nil}, // newest の直後: まだ何もない
+	} {
+		got := b.Since(tc.pos)
+		var gotPos []uint32
+		for _, p := range got {
+			gotPos = append(gotPos, p.Pos)
+		}
+		if len(gotPos) != len(tc.want) {
+			t.Errorf("Since(%#x) = %#x, want %#x", tc.pos, gotPos, tc.want)
+			continue
+		}
+		for i := range gotPos {
+			if gotPos[i] != tc.want[i] {
+				t.Errorf("Since(%#x) = %#x, want %#x", tc.pos, gotPos, tc.want)
+				break
+			}
+		}
+	}
+}
+
+// TestContentBuffer_ContentPosition はヘッダーだけのときはヘッダー末尾、
+// パケットがあれば最新パケットの末尾 (一周を含む) を返すことを確認する。
+func TestContentBuffer_ContentPosition(t *testing.T) {
+	var b ContentBuffer
+	if got := b.ContentPosition(); got != 0 {
+		t.Fatalf("no header: got %d, want 0", got)
+	}
+	b.SetHeader(make([]byte, 0x80), 0xFFFFFF00)
+	if got := b.ContentPosition(); got != 0xFFFFFF80 {
+		t.Fatalf("header only: got %#x, want 0xFFFFFF80", got)
+	}
+	b.Write(make([]byte, 0x100), 0xFFFFFF80, 0)
+	if got := b.ContentPosition(); got != 0x80 {
+		t.Fatalf("after wrap: got %#x, want 0x80", got)
+	}
+}

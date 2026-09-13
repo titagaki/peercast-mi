@@ -638,3 +638,83 @@ func TestRebuildHeader_ReappliedAfterRebroadcast(t *testing.T) {
 		t.Fatal("header should be re-applied to the new channel on first data")
 	}
 }
+
+// -----------------------------------------------------------------------
+// rebuildHeader — ストリーム位置空間
+// -----------------------------------------------------------------------
+
+// TestRebuildHeader_HeaderOccupiesStreamPosition はヘッダーが現在位置に置かれ、
+// データがその末尾から続く (ContentPosition と一致する) ことを確認する。
+func TestRebuildHeader_HeaderOccupiesStreamPosition(t *testing.T) {
+	h, _, ch := setupHandler(t)
+	h.avcTag = makeFLVTag(9, 0, []byte{0x17, 0x00})
+	h.rebuildHeader()
+
+	header, hpos := ch.Header()
+	if hpos != 0 {
+		t.Fatalf("first header pos = %d, want 0", hpos)
+	}
+	if got := ch.ContentPosition(); got != uint32(len(header)) {
+		t.Fatalf("ContentPosition = %d, want header end %d", got, len(header))
+	}
+
+	tag := makeFLVTag(9, 40, []byte{0x17, 0x01, 0xAA})
+	h.writeData(tag, 0)
+	packets := ch.Since(0)
+	if len(packets) != 1 || packets[0].Pos != uint32(len(header)) {
+		t.Fatalf("first data pos = %+v, want %d (right after the header)", packets, len(header))
+	}
+
+	// 同じシーケンスヘッダーの再送はバッファを消さない。
+	h.rebuildHeader()
+	if _, hpos := ch.Header(); hpos != 0 {
+		t.Fatalf("identical header re-applied at pos %d", hpos)
+	}
+	if !ch.HasData() {
+		t.Fatal("identical header must not clear the buffer")
+	}
+
+	// 変更されたヘッダーは現在位置に置かれ、データはその後に続く。
+	h.aacTag = makeFLVTag(8, 0, []byte{0xAF, 0x00})
+	h.rebuildHeader()
+	header2, hpos2 := ch.Header()
+	wantPos := uint32(len(header)) + uint32(len(tag)+4)
+	if hpos2 != wantPos {
+		t.Fatalf("changed header pos = %d, want %d", hpos2, wantPos)
+	}
+	if ch.HasData() {
+		t.Fatal("changed header must clear the buffer")
+	}
+	if got := ch.ContentPosition(); got != wantPos+uint32(len(header2)) {
+		t.Fatalf("ContentPosition = %d, want %d", got, wantPos+uint32(len(header2)))
+	}
+}
+
+// TestRebuildHeader_ReconnectContinuesPositions はエンコーダーが再接続したとき、
+// 位置が 0 に巻き戻らずチャンネルの位置空間を引き継ぎ、同じヘッダーでも
+// 新しい位置で適用される (前のセッションのデータが消える) ことを確認する。
+func TestRebuildHeader_ReconnectContinuesPositions(t *testing.T) {
+	h1, mgr, ch := setupHandler(t)
+	h1.avcTag = makeFLVTag(9, 0, []byte{0x17, 0x00})
+	h1.rebuildHeader()
+	h1.writeData(makeFLVTag(9, 40, []byte{0x17, 0x01, 0xAA}), 0)
+	endOfSession1 := ch.ContentPosition()
+
+	h2 := newHandler(mgr, "127.0.0.1:9998")
+	h2.streamKey = h1.streamKey
+	h2.avcTag = h1.avcTag
+	h2.rebuildHeader()
+
+	_, hpos := ch.Header()
+	if hpos != endOfSession1 {
+		t.Fatalf("reconnect header pos = %d, want %d (continue from previous session)", hpos, endOfSession1)
+	}
+	if ch.HasData() {
+		t.Fatal("previous session's data must be cleared by the new header")
+	}
+	h2.writeData(makeFLVTag(9, 80, []byte{0x17, 0x01, 0xBB}), 0)
+	packets := ch.Since(hpos)
+	if len(packets) != 1 || packets[0].Pos <= hpos {
+		t.Fatalf("new session data = %+v, want one packet after %d", packets, hpos)
+	}
+}

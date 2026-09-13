@@ -27,4 +27,5 @@
 | [0012](0012-relay-lifecycle-in-manager.md) | オンデマンドリレーの組み立ては Manager.StartRelay に置く | 採用 |
 | [0013](0013-docs-follow-code.md) | 仕様書と実装が食い違ったら仕様書を実装に合わせる | 採用 |
 | [0014](0014-stream-on-demand-relay.md) | `/stream/` も `/pls/` と同じ規則でオンデマンドリレーを開始する | 採用 |
+| [0015](0015-stream-position-wrap.md) | ストリーム位置は 32 bit で一周する 1 つの空間として扱う | 採用 |
 | [peercaststation-compat](peercaststation-compat.md) | PeerCastStation との挙動合わせ (複数項目) | 採用 |

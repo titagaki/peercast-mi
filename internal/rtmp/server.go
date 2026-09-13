@@ -250,7 +250,23 @@ func (h *handler) rebuildHeader() {
 		"aacSize", len(h.aacTag),
 	)
 
-	ch.SetHeader(head, 0)
+	// The header occupies its own byte range in the stream position space,
+	// like an FLV file: it sits at the current position and data continues
+	// after it (PeerCastStation / peercast-yt 互換: ContentPosition は
+	// ヘッダー末尾、streamPos = headPack.pos + headPack.len)。
+	if h.headerAppliedTo != ch {
+		// First header of this RTMP session on the channel: continue the
+		// channel's position space (an encoder reconnect must not rewind
+		// positions under the outputs) and always apply the header so the
+		// buffer of the previous session is cleared.
+		h.streamPos = ch.ContentPosition()
+	} else if cur, _ := ch.Header(); bytes.Equal(cur, head) {
+		// Encoders resend identical sequence headers; re-applying would
+		// clear the buffer and make every viewer wait for a keyframe.
+		return
+	}
+	ch.SetHeader(head, h.streamPos)
+	h.streamPos += uint32(len(head))
 	if h.headerAppliedTo != ch {
 		h.headerAppliedTo = ch
 		slog.Info("rtmp: stream started", "remote", h.remoteAddr, "key", h.streamKey)

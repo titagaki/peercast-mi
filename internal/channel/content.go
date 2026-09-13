@@ -31,6 +31,15 @@ func ContentBufferSizeForBitrate(bitrateKbps uint32, seconds float64) int {
 	return packets
 }
 
+// PosBefore reports whether stream position a comes before b. Positions are
+// byte offsets that wrap around at 2^32 (they are 32-bit on the wire, and
+// PeerCastStation masks its 64-bit positions the same way), so the
+// comparison is done on the signed distance: a is before b when b is less
+// than 2^31 bytes ahead of a. That is far more than a buffer ever holds.
+func PosBefore(a, b uint32) bool {
+	return int32(a-b) < 0
+}
+
 // Content is a single stream data packet.
 type Content struct {
 	Pos       uint32
@@ -167,8 +176,9 @@ func (b *ContentBuffer) NewestPos() uint32 {
 	return b.packets[(b.count-1)%len(b.packets)].Pos
 }
 
-// Since returns all packets at or after the given stream position.
-// If pos is older than the oldest buffered packet, returns from the oldest.
+// Since returns all packets at or after the given stream position (in the
+// wrapping order of PosBefore). If pos is older than the oldest buffered
+// packet, returns from the oldest.
 // Packets are returned as-is regardless of keyframe status; callers that need
 // keyframe-aligned delivery (new connections) must apply their own filter.
 func (b *ContentBuffer) Since(pos uint32) []Content {
@@ -191,7 +201,7 @@ func (b *ContentBuffer) Since(pos uint32) []Content {
 	firstIdx := -1
 	for i := start; i < end; i++ {
 		p := b.packets[i%size]
-		if p.Pos >= pos {
+		if !PosBefore(p.Pos, pos) {
 			firstIdx = i
 			break
 		}
@@ -236,7 +246,7 @@ func (b *ContentBuffer) PacketsAfter(ref Content) []Content {
 		p := b.packets[i%size]
 		if ref.Timestamp.IsZero() ||
 			p.Timestamp.After(ref.Timestamp) ||
-			(p.Timestamp.Equal(ref.Timestamp) && p.Pos > ref.Pos) {
+			(p.Timestamp.Equal(ref.Timestamp) && PosBefore(ref.Pos, p.Pos)) {
 			firstIdx = i
 			break
 		}
@@ -254,23 +264,20 @@ func (b *ContentBuffer) PacketsAfter(ref Content) []Content {
 
 // ContentPosition returns the byte position just past the newest content,
 // matching PeerCastStation's Channel.ContentPosition property.
-// Returns 0 if no header has been set.
+// Returns 0 if no header has been set. SetHeader clears the packets, so any
+// buffered packet is newer than the header and its end is the position;
+// only an empty buffer falls back to the end of the header.
 func (b *ContentBuffer) ContentPosition() uint32 {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.header == nil {
 		return 0
 	}
-	headerEnd := b.headerPos + uint32(len(b.header))
 	if b.count == 0 {
-		return headerEnd
+		return b.headerPos + uint32(len(b.header))
 	}
 	newest := b.packets[(b.count-1)%len(b.packets)]
-	newestEnd := newest.Pos + uint32(len(newest.Data))
-	if b.headerPos > newest.Pos {
-		return headerEnd
-	}
-	return newestEnd
+	return newest.Pos + uint32(len(newest.Data))
 }
 
 // HasData returns true if the buffer contains at least one packet.

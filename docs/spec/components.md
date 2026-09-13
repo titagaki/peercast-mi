@@ -73,6 +73,14 @@ AVC または AAC シーケンスヘッダーが揃った時点で組み立て�
 [AAC sequence header タグ]   ← 存在する場合のみ。タイムスタンプは 0 に書き換え
 ```
 
+### ストリーム位置
+
+ヘッダーもデータも 1 つのバイト位置空間に置く (FLV ファイルと同じ並び。PeerCastStation / peercast-yt と同じ)。
+
+- ヘッダーは `SetHeader(head, streamPos)` で現在位置に置き、`streamPos += len(head)` する。データはその末尾から続くので `Channel.ContentPosition()` と一致する
+- 同じ RTMP セッション内で組み立て結果が前回と同一なら `SetHeader` を呼ばない (エンコーダーがシーケンスヘッダーを再送しても、バッファを消して視聴者をキーフレーム待ちにしない)
+- RTMP セッションの最初のヘッダーは `streamPos = Channel.ContentPosition()` から始める。エンコーダーが再接続しても位置は 0 に巻き戻らず、同じヘッダーでも新しい位置で適用されて前セッションのデータが消える
+
 各タグには 4 バイトの BackPointer (タグサイズ) を後置する。
 
 シーケンスヘッダーが再送されたとき (エンコーダー再接続等) は head パケットを更新し、接続中の全出力ストリームに `NotifyHeader()` で通知する。
@@ -150,6 +158,7 @@ type ContentBuffer struct {
 
 ### 設計方針
 
+- 位置 (`Pos`, `headerPos`) は 2^32 で一周する (PCP の pkt.pos は 32 bit。PeerCastStation も送信時に `& 0xFFFFFFFF` する)。前後関係は `PosBefore(a, b)` (= `int32(a-b) < 0`、2^31 未満の距離を前方とみなす) で判定し、素の大小比較はしない
 - `header`: `SetHeader` で上書き。新規接続時に必ず最初に送る
 - `packets`: リングバッファ。サイズはビットレートと `content_buffer_seconds` 設定 (デフォルト 8 秒) から自動計算。最小 64 パケット。満杯時は最古から上書き
 - 新規接続は `header` を送信後、`ContFlags` に `InterFrame (0x02)` が含まれない最初のパケット (= キーフレーム) 以降を送る
@@ -176,15 +185,19 @@ func (b *ContentBuffer) OldestPos() uint32
 // NewestPos は最新パケットのストリーム位置を返す。バッファ空の場合は 0。
 func (b *ContentBuffer) NewestPos() uint32
 
-// Since は指定位置以降のパケットを返す。
+// PosBefore は一周を考慮して位置 a が b より前かを返す。
+func PosBefore(a, b uint32) bool
+
+// Since は指定位置以降のパケットを PosBefore の順序で返す。
 // pos が古すぎる場合は最古パケットから返す。空の場合は nil。
 func (b *ContentBuffer) Since(pos uint32) []Content
 
-// PacketsAfter は ref より (Timestamp, Pos) 順で厳密に新しいパケットを返す。
+// PacketsAfter は ref より (Timestamp, Pos) 順で厳密に新しいパケットを返す (Pos の比較は PosBefore)。
 // ref.Timestamp がゼロ値なら全パケットを返す。HTTPOutputStream が使用。
 func (b *ContentBuffer) PacketsAfter(ref Content) []Content
 
 // ContentPosition は最新コンテンツ末尾のバイト位置を返す (PeerCastStation の Channel.ContentPosition)。
+// パケットがなければヘッダー末尾 (SetHeader でパケットは消えるので、あればそれが常に最新)。
 // リレー再接続時の x-peercast-pos に使う。
 func (b *ContentBuffer) ContentPosition() uint32
 
@@ -643,25 +656,33 @@ sendInitial():
   2. host アトム送信 (pcputil.BuildHostAtom で構築)
 
 streamLoop():
+  0. startCursor(reqPos) で開始位置を決める (下記)
   1. drainNotifications() — 非ブロッキングで info/track/header/bcst 通知を処理
   2. sendDataPackets() — Channel.Since(pos) で未送信パケットを送信
+     - 送信直前に headerCh を非ブロッキングで確認し、ヘッダー変更があれば先に送って位置を取り直す
+       (SetHeader + Write の競合で新ストリームのデータを旧ヘッダーの後ろに流さない)
      - 最古の未送信パケットが 5 秒以上前のものなら Overflow とみなし quit(QUIT+SKIP) で切断
      - 15KB を超えるパケットは分割し、2 個目以降に Fragment (0x01) フラグを OR する
   3. 送信待ちがなければ Signal() / 通知チャネル / stallTimer を select
      - 5 秒以上データが来ない場合 → 接続を切断 (quit なし)
      - infoCh 通知時: chan > info を送信 (ブロードキャストチャンネルなら bcst でラップ)
      - trackCh 通知時: chan > trck を送信 (同上)
-     - headerCh 通知時: chan > pkt(type=head) を送信
+     - headerCh 通知時: chan > pkt(type=head) を送信し、送信位置を新ヘッダー位置に戻してキーフレーム待ちにする
+       (バッファは SetHeader で消えており、位置が巻き戻っている可能性があるため。peercast-yt の streamIndex 変更時と同じ)
      - bcstCh: bcst アトムを下流に転送
      - closeCh (readLoop からの quit / Close()): 上流ノード情報を host アトムで送ってから quit(QUIT+SHUTDOWN)
      - closeCh (MakeRelayable からの Evict()): 代替候補 host アトム最大 8 件 (SelectSourceHosts) を送ってから quit(QUIT+UNAVAILABLE)
 ```
 
-### x-peercast-pos による開始位置
+### x-peercast-pos による開始位置 (startCursor)
 
-- `reqPos == 0` (未指定): ヘッダー位置から開始
-- `reqPos >= OldestPos()`: その位置から開始
-- `reqPos < OldestPos()` (古すぎる): `OldestPos()` から開始
+位置の前後判定は `channel.PosBefore` (2^32 の一周を考慮)。
+
+- バッファが空: `reqPos` によらずヘッダー位置
+- `reqPos == 0` (未指定): `OldestPos()` (= SetHeader 以降の全部。ヘッダー位置は使わない: 同じヘッダーを再送し続ける上流ではヘッダー位置がデータから際限なく離れるため)
+- `reqPos` が `OldestPos()` より前 (バッファから溢れている): `OldestPos()`
+- `reqPos` が `ContentPosition()` (最新パケット末尾) より後 (別の位置空間から再接続してきた等): `ContentPosition()`。バックログは送らず以降のデータだけ送る
+- それ以外: `reqPos`
 
 いずれの場合も最初のキーフレーム (`ContFlags == 0`) まではスキップする。
 

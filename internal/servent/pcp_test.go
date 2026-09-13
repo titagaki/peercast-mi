@@ -279,3 +279,154 @@ func TestCanAdmitRelay_Banned(t *testing.T) {
 		t.Fatal("other remote must still be admitted")
 	}
 }
+
+// --- streamLoop の開始位置と位置の巻き戻り ---
+
+// readPktPositions は peer から n 個の chan/pkt アトムを読み、(type, pos) を返す。
+func readPktPositions(t *testing.T, peer net.Conn, n int) (types []string, positions []uint32) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		peer.SetReadDeadline(time.Now().Add(2 * time.Second))
+		atom, err := pcp.ReadAtom(peer)
+		if err != nil {
+			t.Fatalf("read atom %d: %v", i, err)
+		}
+		if atom.Tag != pcp.PCPChan {
+			t.Fatalf("atom %d = %v, want chan", i, atom.Tag)
+		}
+		cp, err := pcp.ParseChanPacket(atom)
+		if err != nil || cp.Pkt == nil {
+			t.Fatalf("atom %d: not a pkt: %v", i, err)
+		}
+		types = append(types, cp.Pkt.Type.String())
+		positions = append(positions, cp.Pkt.Pos)
+	}
+	return types, positions
+}
+
+// runStreamLoop は streamLoop を goroutine で起動し、停止用の関数を返す。
+func runStreamLoop(t *testing.T, out *PCPOutputStream, peer net.Conn, reqPos uint32) func() {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		out.streamLoop(reqPos)
+	}()
+	return func() {
+		out.Close()
+		peer.Close()
+		<-done
+	}
+}
+
+// TestStreamLoop_ResumeAcrossWrap は位置が 2^32 で一周した直後に x-peercast-pos で
+// 再開しても、一周前のパケットを送り直さず要求位置から送ることを確認する。
+func TestStreamLoop_ResumeAcrossWrap(t *testing.T) {
+	out, peer := newTestOutputStream(t)
+	out.ch.SetHeader([]byte("hdr"), 0xFFFFFC00)
+	out.ch.Write(make([]byte, 0x200), 0xFFFFFC00, 0)
+	out.ch.Write(make([]byte, 0x200), 0xFFFFFE00, 0)
+	out.ch.Write(make([]byte, 0x200), 0x00000000, 0) // 一周
+	out.ch.Write(make([]byte, 0x200), 0x00000200, 0)
+	out.ch.Write(make([]byte, 0x200), 0x00000400, 0)
+
+	stop := runStreamLoop(t, out, peer, 0x00000200)
+	defer stop()
+	_, pos := readPktPositions(t, peer, 2)
+	if pos[0] != 0x200 || pos[1] != 0x400 {
+		t.Fatalf("positions = %#x, want [0x200 0x400]", pos)
+	}
+}
+
+// TestStreamLoop_ReqPosBehindBufferStartsFromOldest はバッファから溢れた位置を
+// 要求されたとき最古のパケットから送ることを確認する (一周をまたぐ場合も)。
+func TestStreamLoop_ReqPosBehindBufferStartsFromOldest(t *testing.T) {
+	out, peer := newTestOutputStream(t)
+	out.ch.SetHeader([]byte("hdr"), 0xFFFFF000)
+	out.ch.Write(make([]byte, 0x200), 0xFFFFFE00, 0)
+	out.ch.Write(make([]byte, 0x200), 0x00000000, 0)
+
+	stop := runStreamLoop(t, out, peer, 0xFFFFF000)
+	defer stop()
+	_, pos := readPktPositions(t, peer, 2)
+	if pos[0] != 0xFFFFFE00 || pos[1] != 0 {
+		t.Fatalf("positions = %#x, want [0xFFFFFE00 0]", pos)
+	}
+}
+
+// TestStartCursor は x-peercast-pos の要求位置をバッファの範囲に丸める規則を確認する。
+func TestStartCursor(t *testing.T) {
+	out, peer := newTestOutputStream(t)
+	defer peer.Close()
+
+	// バッファが空: 要求位置によらずヘッダー位置。
+	out.ch.SetHeader([]byte("hdr"), 0x1000)
+	for _, reqPos := range []uint32{0, 0x800, 0x2000} {
+		if cur := out.startCursor(reqPos); cur.pos != 0x1000 || !cur.waitingForKeyframe {
+			t.Fatalf("empty buffer, reqPos %#x: cursor = %+v, want pos 0x1000 waiting for keyframe", reqPos, cur)
+		}
+	}
+
+	out.ch.Write(make([]byte, 0x100), 0x1003, 0)
+	out.ch.Write(make([]byte, 0x100), 0x1103, 0)
+	for _, tc := range []struct {
+		name    string
+		reqPos  uint32
+		wantPos uint32
+	}{
+		{"unspecified → oldest", 0, 0x1003},
+		{"behind oldest → oldest", 0x800, 0x1003},
+		{"inside buffer → as requested", 0x1103, 0x1103},
+		{"newest end → as requested", 0x1203, 0x1203},
+		{"ahead of buffer → newest end (skip backlog)", 0x10000000, 0x1203},
+		{"more than 2^31 ahead reads as behind → oldest", 0x90000000, 0x1003},
+	} {
+		if cur := out.startCursor(tc.reqPos); cur.pos != tc.wantPos {
+			t.Errorf("%s: reqPos %#x → pos %#x, want %#x", tc.name, tc.reqPos, cur.pos, tc.wantPos)
+		}
+	}
+}
+
+// TestStreamLoop_UnspecifiedStartsFromOldest は x-peercast-pos なしのとき、ヘッダー位置が
+// データから 2^31 以上離れていても (同じヘッダーを再送し続ける上流) バッファ全体を送ることを確認する。
+func TestStreamLoop_UnspecifiedStartsFromOldest(t *testing.T) {
+	out, peer := newTestOutputStream(t)
+	out.ch.SetHeader([]byte("hdr"), 0)
+	out.ch.Write(make([]byte, 0x100), 0x90000000, 0)
+	out.ch.Write(make([]byte, 0x100), 0x90000100, 0)
+
+	stop := runStreamLoop(t, out, peer, 0)
+	defer stop()
+	_, pos := readPktPositions(t, peer, 2)
+	if pos[0] != 0x90000000 || pos[1] != 0x90000100 {
+		t.Fatalf("positions = %#x, want [0x90000000 0x90000100]", pos)
+	}
+}
+
+// TestStreamLoop_HeaderChangeRestartsFromNewHeader はヘッダー変更で位置が巻き戻っても
+// (エンコーダー再接続など)、新ヘッダーを送ってから新しい位置のデータを続けることを確認する。
+func TestStreamLoop_HeaderChangeRestartsFromNewHeader(t *testing.T) {
+	out, peer := newTestOutputStream(t)
+	out.ch.SetHeader([]byte("hdr1"), 0x40000000)
+	out.ch.TryAddOutput(out, 0, 0) // 以降の SetHeader の通知を受け取る
+	out.ch.Write(make([]byte, 0x100), 0x40000004, 0)
+
+	stop := runStreamLoop(t, out, peer, 0)
+	defer stop()
+	if _, pos := readPktPositions(t, peer, 1); pos[0] != 0x40000004 {
+		t.Fatalf("first position = %#x, want 0x40000004", pos[0])
+	}
+
+	// 新しいストリーム: ヘッダーもデータも位置 0 付近から。
+	out.ch.SetHeader([]byte("hdr2"), 0)
+	out.ch.Write(make([]byte, 0x100), 4, 0x02) // 非キーフレームはヘッダー直後に送らない
+	out.ch.Write(make([]byte, 0x100), 0x104, 0)
+
+	types, pos := readPktPositions(t, peer, 2)
+	if types[0] != "head" || pos[0] != 0 {
+		t.Fatalf("after header change: got %s@%#x, want head@0", types[0], pos[0])
+	}
+	if types[1] != "data" || pos[1] != 0x104 {
+		t.Fatalf("after header: got %s@%#x, want data@0x104 (keyframe)", types[1], pos[1])
+	}
+}
