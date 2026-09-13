@@ -210,6 +210,7 @@ const (
 	statusForbidden          = "HTTP/1.0 403 Forbidden\r\n\r\n"
 	statusNotFound           = "HTTP/1.0 404 Not Found\r\n\r\n"
 	statusServiceUnavailable = "HTTP/1.0 503 Service Unavailable\r\n\r\n"
+	statusGatewayTimeout     = "HTTP/1.0 504 Gateway Timeout\r\n\r\n"
 )
 
 // viewerRequest is the part of a /pls/ or /stream/ request the handlers act

@@ -181,7 +181,7 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 9. 上流からの pkt アトムを Channel.ContentBuffer に継続的に書き込む
 10. YPClient は globalIP 未取得なら一度 YP に接続して oleh から取得し、切断する
     (リレーチャンネルは YP に bcst しない)
-11. /stream/ の場合は同じ HTTP 接続でそのまま視聴を開始する (HTTPOutputStream が初回データを最大 30 秒待つ)。
+11. /stream/ の場合は同じ HTTP 接続でそのまま視聴を開始する (HTTPOutputStream が chan info を最大 10 秒待って 200 を返し、初回データを最大 30 秒待つ)。
     /pls/ の場合はプレイリストを返し、プレイヤーが改めて /stream/ を開く
 ```
 

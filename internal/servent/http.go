@@ -14,10 +14,16 @@ const (
 	directWriteTimeout = 60 * time.Second
 )
 
-// firstDataTimeout bounds how long a viewer waits for the first packet after
-// the response headers have been sent (e.g. while an on-demand relay is
-// being established). A variable so tests can shorten it.
-var firstDataTimeout = 30 * time.Second
+// infoWaitTimeout bounds how long a viewer waits for the channel info
+// (content type) before the response headers are sent; on timeout the
+// viewer gets 504 (PeerCastStation 互換: WaitForReadyContentTypeAsync は 10 秒)。
+// firstDataTimeout bounds how long a viewer then waits for the first packet
+// after the response headers (e.g. while an on-demand relay is being
+// established). Variables so tests can shorten them.
+var (
+	infoWaitTimeout  = 10 * time.Second
+	firstDataTimeout = 30 * time.Second
+)
 
 // HTTPOutputStream sends raw FLV data to a media player over HTTP.
 // The HTTP request has already been consumed by the Listener; run only
@@ -53,9 +59,31 @@ func (o *HTTPOutputStream) run() {
 		}
 	}()
 
-	// Send HTTP response headers immediately so the player does not time out
-	// waiting for a response while the relay chain is being established.
+	// Wait for the channel info before answering so that Content-Type and
+	// the icy-* headers describe the stream: a freshly started relay has no
+	// info until the upstream's chan atom arrives (that is before any data,
+	// so this wait is short). Nothing has been written yet, so a timeout can
+	// still be reported as an HTTP error.
 	info := o.ch.Info()
+	if info.Type == "" {
+		timer := time.NewTimer(infoWaitTimeout)
+		defer timer.Stop()
+		for info.Type == "" {
+			select {
+			case <-o.infoCh:
+				info = o.ch.Info()
+			case <-o.closeCh:
+				return
+			case <-timer.C:
+				slog.Info("http: no channel info within timeout", "remote", o.remoteAddr, "id", o.id)
+				io.WriteString(o.conn, statusGatewayTimeout)
+				return
+			}
+		}
+	}
+
+	// Send the response headers before waiting for data so the player does
+	// not time out while the relay chain is being established.
 	mimeType := info.MIMEType
 	if mimeType == "" {
 		mimeType = "video/x-flv"

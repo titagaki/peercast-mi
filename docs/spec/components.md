@@ -591,9 +591,10 @@ bcst
 | チャンネル未登録でリレーを開始できない | 404 | 404 |
 | チャンネル未登録で、リレーチャンネル数が上限 | 503 | 503 |
 | `tryAdmit` 失敗 (視聴数・帯域上限) | — | 503 |
+| ChannelInfo が 10 秒以内に届かない (4.9 手順 3) | — | 504 |
 | 成功 | 200 + M3U | 200 + ストリーム (4.9) |
 
-`/stream/` は自動リレー開始後もリダイレクトせず、同じ接続で 4.9 のフローに入る (リレー確立待ちは 4.9 の初回データ待機がそのまま担う)。
+`/stream/` は自動リレー開始後もリダイレクトせず、同じ接続で 4.9 のフローに入る (リレー確立待ちは 4.9 の info 待ちと初回データ待機が担う)。
 
 ### 接続数制限 (admission)
 
@@ -726,11 +727,16 @@ chan
 ```
 1. Listener が HTTP GET /stream/<channel-id>[.ext][?tip=host:port] を解析し (4.7 視聴要求)、
    チャンネルを解決 (未登録なら自動リレー開始) して tryAdmit したうえで run() に入る
-   (失敗時は Listener が 400/404/503 を返す)
+   (失敗時は Listener が 400/403/404/503 を返す)
 
 2. 読み取り監視 goroutine を起動 (プレイヤー切断をデータ送信がない間も検知する)
 
-3. HTTP/1.0 200 OK レスポンスを即座に送信
+3. ChannelInfo.Type が空なら infoCh の通知を最大 10 秒 (infoWaitTimeout) 待つ
+   (リレー開始直後は上流の chan info アタムが届くまで info がない。データより先に届くので短い)
+   時間切れ → 504 Gateway Timeout を返して切断 (まだ何も書いていないのでエラーを返せる)
+   閉じられた → 何も返さず終了
+
+4. HTTP/1.0 200 OK レスポンスを送信
    (リレー確立待ちの間にプレイヤーがタイムアウトしないよう、データ到着前に返す)
    Content-Type: <ChannelInfo.MIMEType> (デフォルト "video/x-flv")
    icy-name:    sanitizeHeaderValue(ChannelInfo.Name)
@@ -739,14 +745,14 @@ chan
    icy-bitrate: <ChannelInfo.Bitrate>
    ※ sanitizeHeaderValue() で CR/LF を除去し HTTP ヘッダーインジェクションを防止
 
-4. Channel.HasData() を確認
+5. Channel.HasData() を確認
    データなし → Signal() で最大 30 秒 (firstDataTimeout) 待機、タイムアウトなら切断
    (200 送信済みなので別のエラーは書かない。リレーチャンネルは残り、視聴者ゼロなら Cleaner が後で削除する)
 
-5. Channel.Header() を送信
+6. Channel.Header() を送信
    (待機中に届いた headerCh の通知はこの送信で消化済みなので捨てる。捨てないとヘッダーが 2 回送られる)
 
-6. キーフレームを起点にストリームデータを連続送信
+7. キーフレームを起点にストリームデータを連続送信
    - Channel.PacketsAfter(sent) で最後に送った Content より新しいものだけを取る
    - ContFlags != 0 のパケット (= 非キーフレーム) をスキップ
    - キーフレーム以降は全パケットを順次送信
@@ -756,7 +762,7 @@ chan
 ```
 
 > **注意**: HTTPOutputStream は `BcstForwarder` インターフェースを実装しない。
-> `infoCh` / `trackCh` の通知は受け取るが無視する (`headerCh` のみ処理する)。
+> `infoCh` は info 待ち (手順 3) にだけ使い、配信中の info / `trackCh` の通知は無視する。
 > ICY メタデータ (`icy-metaint`) は現在未実装。
 
 ---

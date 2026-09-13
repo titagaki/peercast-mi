@@ -19,7 +19,7 @@ peca-live のプレイヤー (flv.js) は `/stream/<id>.flv?tip=host:port` を�
 - tip は `host:port` (port 1..65535) のみ受理し、それ以外は 400。登録済みチャンネルへの要求でも検証する。接続先の allowlist などの制限は新たに設けない (`/pls/` と同じ露出範囲)
 - パスは `<32 hex>[.ext]` のみ受理し、余分なパス要素は 400 (PeerCastStation の `ChannelIdPattern` と同じ)
 - `/stream/` の失敗は body 送信前の HTTP ステータス (400 / 404 / 503) で返す。200 送信後の初回データ待機の時間切れは切断のみで、別のエラーは書かない
-- 初回データ待機は既存の `HTTPOutputStream.run()` (200 を先に送り、最大 30 秒待つ) をそのまま使う。PeerCastStation のように「データ到着まで待ってから 200 / 504」にはしない
+- 初回データ待機は既存の `HTTPOutputStream.run()` (200 を先に送り、最大 30 秒待つ) をそのまま使う。PeerCastStation のように「データ到着まで待ってから 200 / 504」にはしない (→ [0017](0017-http-wait-for-info.md) で「info だけ待ってから 200」に更新)
 
 ## 却下した案
 

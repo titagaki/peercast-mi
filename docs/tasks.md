@@ -13,7 +13,6 @@
 
 ### 機能
 
-- [ ] HTTP 直接視聴で 200 を先に返す方式のままで良いか (PeerCastStation はデータ到着を待ってから 200 / 504) — [decisions/0014](decisions/0014-stream-on-demand-relay.md)。リレー直後は `icy-name` が空、`Content-Type` が既定値になる問題も同根
 - [ ] HTTP 直接視聴の ICY メタデータ (`icy-metaint`) — [spec/components.md 4.9](spec/components.md)
 - [ ] push (GIV) 接続の対応範囲を再検討するかどうか — 現状は対象外 ([decisions/0003](decisions/0003-no-push-connection.md))
 
@@ -32,6 +31,7 @@
 
 ## 完了
 
+- [x] 2026-09-14 HTTP 視聴は ChannelInfo を最大 10 秒待ってから 200 (時間切れは 504)。リレー直後の `icy-name` 空・`Content-Type` 既定値も解消 — [decisions/0017](decisions/0017-http-wait-for-info.md)
 - [x] 2026-09-14 オンデマンドリレーの開始要求を送信元で制限 (`relay_request_from`、既定はプライベートのみ) し、`max_relay_channels` を追加。接続先の制限は設けない — [decisions/0016](decisions/0016-relay-request-source-policy.md)
 - [x] 2026-09-14 ストリーム位置が 4 GiB で一周したときの扱い — `Since` の再送ループで下流が切断されていた。ヘッダー変更時の位置巻き戻りと RTMP のヘッダー位置も同時に修正 — [decisions/0015](decisions/0015-stream-position-wrap.md)
 - [x] 2026-09-14 `x-peercast-pos` の `reqPos == 0` を「未指定」と同一視する点の妥当性確認 — 変更不要。PeerCastStation・peercast-yt とも実質同じ扱い ([decisions/0002](decisions/0002-x-peercast-pos-resume.md) に検証結果を追記)

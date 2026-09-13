@@ -55,8 +55,19 @@ func (r *stubRelay) Run() {
 func (r *stubRelay) Stop()                  { r.stopOnce.Do(func() { close(r.stopCh) }) }
 func (r *stubRelay) SetGlobalIP(uint32)     {}
 func (r *stubRelay) SetOnStopped(fn func()) { r.onStopped = fn }
-func feedFLV(ch *channel.Channel)           { ch.SetHeader(flvHeader, 0); ch.Write(flvKeyframe, 1, 0) }
-func feedNothing(*channel.Channel)          {}
+
+var testInfo = channel.ChannelInfo{Name: "test channel", Genre: "test", Type: "FLV", MIMEType: "video/x-flv", Bitrate: 500}
+
+// feedFLV は上流が chan info → head → data の順に届けるのを模す。
+func feedFLV(ch *channel.Channel) {
+	ch.SetInfo(testInfo)
+	ch.SetHeader(flvHeader, 0)
+	ch.Write(flvKeyframe, 1, 0)
+}
+
+// feedInfoOnly は info だけ届いてデータが来ない上流を模す。
+func feedInfoOnly(ch *channel.Channel) { ch.SetInfo(testInfo) }
+func feedNothing(*channel.Channel)     {}
 func stubFactory(feed func(*channel.Channel)) channel.RelayFactory {
 	return func(ch *channel.Channel, _ string) channel.RelayHandle { return newStubRelay(ch, feed) }
 }
@@ -192,6 +203,12 @@ func wantFLV(t *testing.T, v *streamViewer) {
 	t.Helper()
 	if v.resp.StatusCode != 200 {
 		t.Fatalf("status %d, want 200", v.resp.StatusCode)
+	}
+	if ct := v.resp.Header.Get("Content-Type"); ct != testInfo.MIMEType {
+		t.Fatalf("Content-Type = %q, want %q", ct, testInfo.MIMEType)
+	}
+	if name := v.resp.Header.Get("icy-name"); name != testInfo.Name {
+		t.Fatalf("icy-name = %q, want %q (headers must reflect the channel info)", name, testInfo.Name)
 	}
 	want := append(append([]byte(nil), flvHeader...), flvKeyframe...)
 	if got := v.readBody(t, len(want)); !bytes.Equal(got, want) {
@@ -361,14 +378,36 @@ func TestHTTPStream_Errors(t *testing.T) {
 	})
 }
 
-// TestHTTPStream_FirstDataTimeout はリレーからデータが届かないとき、200 送信後に
+// TestHTTPStream_InfoTimeout はリレーから chan info が届かないとき、ヘッダー送信前なので
+// 504 を返し、リレーは残ることを確認する。
+func TestHTTPStream_InfoTimeout(t *testing.T) {
+	old := infoWaitTimeout
+	infoWaitTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { infoWaitTimeout = old })
+
+	l, mgr := newRelayListener(t, stubFactory(feedNothing), 0)
+	v := openStream(t, l, "/stream/"+testChannelHex+".flv?tip="+testTip)
+	if v.resp.StatusCode != 504 {
+		t.Fatalf("status %d, want 504", v.resp.StatusCode)
+	}
+	v.close(t)
+	ch, ok := mgr.GetByID(testChannelID)
+	if !ok {
+		t.Fatal("relay removed by a viewer timeout")
+	}
+	if ch.NumListeners() != 0 {
+		t.Fatalf("listeners = %d, want 0", ch.NumListeners())
+	}
+}
+
+// TestHTTPStream_FirstDataTimeout は info は届いたがデータが届かないとき、200 送信後に
 // 待機上限で接続を閉じ (別のエラーは書かず)、リレーは残ることを確認する。
 func TestHTTPStream_FirstDataTimeout(t *testing.T) {
 	old := firstDataTimeout
 	firstDataTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { firstDataTimeout = old })
 
-	l, mgr := newRelayListener(t, stubFactory(feedNothing), 0)
+	l, mgr := newRelayListener(t, stubFactory(feedInfoOnly), 0)
 	v := openStream(t, l, "/stream/"+testChannelHex+".flv?tip="+testTip)
 	if v.resp.StatusCode != 200 {
 		t.Fatalf("status %d, want 200", v.resp.StatusCode)
