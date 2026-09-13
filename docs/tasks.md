@@ -13,8 +13,7 @@
 
 ### 機能
 
-- [ ] HTTP 直接視聴の ICY メタデータ (`icy-metaint`) — [spec/components.md 4.9](spec/components.md)
-- [ ] push (GIV) 接続の対応範囲を再検討するかどうか — 現状は対象外 ([decisions/0003](decisions/0003-no-push-connection.md))
+(なし)
 
 ### 保守
 
@@ -31,6 +30,8 @@
 
 ## 完了
 
+- [x] 2026-09-14 HTTP 直接視聴の ICY メタデータ (`icy-metaint`) — 対象外として閉じる。peercast-yt の MP3 + WinAmp 向け機能で PeerCastStation も非対応、FLV には挿入できない ([spec/components.md 4.9](spec/components.md))
+- [x] 2026-09-14 push (GIV) 接続の再検討 — 対象外を維持。PeerCastStation も非対応 ([decisions/0003](decisions/0003-no-push-connection.md) に追記)
 - [x] 2026-09-14 HTTP 視聴は ChannelInfo を最大 10 秒待ってから 200 (時間切れは 504)。リレー直後の `icy-name` 空・`Content-Type` 既定値も解消 — [decisions/0017](decisions/0017-http-wait-for-info.md)
 - [x] 2026-09-14 オンデマンドリレーの開始要求を送信元で制限 (`relay_request_from`、既定はプライベートのみ) し、`max_relay_channels` を追加。接続先の制限は設けない — [decisions/0016](decisions/0016-relay-request-source-policy.md)
 - [x] 2026-09-14 ストリーム位置が 4 GiB で一周したときの扱い — `Since` の再送ループで下流が切断されていた。ヘッダー変更時の位置巻き戻りと RTMP のヘッダー位置も同時に修正 — [decisions/0015](decisions/0015-stream-position-wrap.md)

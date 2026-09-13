@@ -763,7 +763,7 @@ chan
 
 > **注意**: HTTPOutputStream は `BcstForwarder` インターフェースを実装しない。
 > `infoCh` は info 待ち (手順 3) にだけ使い、配信中の info / `trackCh` の通知は無視する。
-> ICY メタデータ (`icy-metaint`) は現在未実装。
+> ICY メタデータ (`icy-metaint`) は対象外 (peercast-yt が MP3 チャンネル + `icy-metadata: 1` のときだけ行う WinAmp 向け機能。PeerCastStation も非対応。FLV には挿入できない)。
 
 ---
 
