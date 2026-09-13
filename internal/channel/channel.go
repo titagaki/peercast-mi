@@ -91,24 +91,11 @@ type Channel struct {
 	upstreamIP        uint32
 	upstreamPort      uint16
 
-	// knownHosts is a bounded cache of Host atoms observed via bcst forwarding.
-	// Used by SelectSourceHosts to hand out alternative relay candidates when
-	// this node has no free relay slots (PeerCastStation 互換: Channel.Nodes).
-	knownHosts []*pcp.Atom
-
-	// nodeStats tracks per-downstream-node listener/relay counts reported
-	// via BCST HOST atoms. Keyed by session ID.
-	// PeerCastStation 互換: Channel.Nodes の DirectCount / RelayCount。
-	nodeStats map[pcp.GnuID]nodeStats
+	// nodes holds what we learned about other nodes via BCST HOST atoms
+	// (alternative relay candidates, downstream listener/relay counts).
+	// It has its own lock; see nodes.go.
+	nodes nodeTable
 }
-
-// nodeStats holds the listener/relay counts reported by a downstream node.
-type nodeStats struct {
-	Listeners int
-	Relays    int
-}
-
-const maxKnownHosts = 32
 
 // New creates a new Channel. bufSize sets the ContentBuffer ring buffer size;
 // if <= 0, DefaultContentBufferSize is used.
@@ -408,44 +395,27 @@ func (c *Channel) NumRelays() int {
 // identified by its session ID. Called when a BCST HOST atom is received.
 // PeerCastStation 互換: Channel.AddNode で DirectCount / RelayCount を記録。
 func (c *Channel) UpdateNodeStats(sessionID pcp.GnuID, listeners, relays int) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.nodeStats == nil {
-		c.nodeStats = make(map[pcp.GnuID]nodeStats)
-	}
-	c.nodeStats[sessionID] = nodeStats{Listeners: listeners, Relays: relays}
+	c.nodes.updateStats(sessionID, listeners, relays)
 }
 
 // RemoveNodeStats removes the downstream node stats for the given session ID.
 // Called when a PCP output stream disconnects.
 func (c *Channel) RemoveNodeStats(sessionID pcp.GnuID) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.nodeStats, sessionID)
+	c.nodes.removeStats(sessionID)
 }
 
 // TotalListeners returns NumListeners (local) plus all downstream nodes'
 // listener counts. PeerCastStation 互換: TotalDirects.
 func (c *Channel) TotalListeners() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	total := c.numListeners
-	for _, ns := range c.nodeStats {
-		total += ns.Listeners
-	}
-	return total
+	downstream, _ := c.nodes.totals()
+	return c.NumListeners() + downstream
 }
 
 // TotalRelays returns NumRelays (local) plus all downstream nodes'
 // relay counts. PeerCastStation 互換: TotalRelays.
 func (c *Channel) TotalRelays() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	total := c.numRelays
-	for _, ns := range c.nodeStats {
-		total += ns.Relays
-	}
-	return total
+	_, downstream := c.nodes.totals()
+	return c.NumRelays() + downstream
 }
 
 // CloseAll closes all registered output streams.
@@ -455,8 +425,8 @@ func (c *Channel) CloseAll() {
 	c.outputs = nil
 	c.numListeners = 0
 	c.numRelays = 0
-	c.nodeStats = nil
 	c.mu.Unlock()
+	c.nodes.reset()
 	for _, o := range outputs {
 		o.Close()
 	}
@@ -469,65 +439,16 @@ func (c *Channel) UptimeSeconds() uint32 {
 
 // AddKnownHost records a Host atom observed via bcst forwarding, deduped by
 // the host's session ID. Older entries are evicted when the cache is full.
+// Callers are responsible for not passing this node's own Host atom.
 func (c *Channel) AddKnownHost(host *pcp.Atom) {
-	if host == nil {
-		return
-	}
-	sidAtom := host.FindChild(pcp.PCPHostID)
-	if sidAtom == nil {
-		return
-	}
-	sid, err := sidAtom.GetID()
-	if err != nil {
-		return
-	}
-	var zero pcp.GnuID
-	if sid == zero || sid == c.sessionIDForKnownHosts() {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	// Replace existing entry for the same sid.
-	for i, h := range c.knownHosts {
-		if existing := h.FindChild(pcp.PCPHostID); existing != nil {
-			if id, err := existing.GetID(); err == nil && id == sid {
-				c.knownHosts[i] = host
-				return
-			}
-		}
-	}
-	if len(c.knownHosts) >= maxKnownHosts {
-		c.knownHosts = c.knownHosts[1:]
-	}
-	c.knownHosts = append(c.knownHosts, host)
+	c.nodes.addKnownHost(host)
 }
 
-// sessionIDForKnownHosts returns a zero id; the channel doesn't know its own
-// session ID directly, so dedup against self is handled by callers.
-func (c *Channel) sessionIDForKnownHosts() pcp.GnuID { return pcp.GnuID{} }
-
-// SelectSourceHosts returns up to max recently observed Host atoms. Used by
-// PCPOutputStream when the relay is full to hand out alternative nodes
-// (PeerCastStation 互換: SelectSourceHosts)。
+// SelectSourceHosts returns up to max recently observed Host atoms, newest
+// first. Used by PCPOutputStream when the relay is full to hand out
+// alternative nodes (PeerCastStation 互換: SelectSourceHosts)。
 func (c *Channel) SelectSourceHosts(max int) []*pcp.Atom {
-	if max <= 0 {
-		return nil
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	n := len(c.knownHosts)
-	if n > max {
-		n = max
-	}
-	if n == 0 {
-		return nil
-	}
-	// Return newest first.
-	out := make([]*pcp.Atom, 0, n)
-	for i := len(c.knownHosts) - 1; i >= 0 && len(out) < n; i-- {
-		out = append(out, c.knownHosts[i])
-	}
-	return out
+	return c.nodes.selectSourceHosts(max)
 }
 
 // Broadcast forwards a bcst atom to all PCP output streams except the sender
@@ -573,12 +494,12 @@ func (c *Channel) Connections() []ConnectionInfo {
 
 // RelayNodeEntry is a snapshot of a downstream relay peer.
 type RelayNodeEntry struct {
-	SessionID   pcp.GnuID
-	RemoteAddr  string
-	RemotePort  uint16
+	SessionID    pcp.GnuID
+	RemoteAddr   string
+	RemotePort   uint16
 	IsFirewalled bool
-	Agent       string
-	Version     uint32
+	Agent        string
+	Version      uint32
 }
 
 // RelayNodes returns info about downstream PCP relay peers.
