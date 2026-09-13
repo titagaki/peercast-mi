@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/titagaki/peercast-pcp/pcp"
 )
@@ -349,4 +350,92 @@ func TestManager_Concurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// ---------------------------------------------------------------------------
+// StartRelay
+// ---------------------------------------------------------------------------
+
+func TestStartRelay_NoFactory(t *testing.T) {
+	mgr := NewManager(pcp.GnuID{})
+	if _, err := mgr.StartRelay(pcp.GnuID{1}, "203.0.113.1:7144"); err != ErrNoRelayFactory {
+		t.Fatalf("expected ErrNoRelayFactory, got %v", err)
+	}
+}
+
+func TestStartRelay_CreatesChannelAndRunsRelay(t *testing.T) {
+	mgr := NewManager(pcp.GnuID{})
+	mgr.SetGlobalIP(0x01020304)
+	var created *fakeRelay
+	mgr.NewRelay = func(ch *Channel, addr string) RelayHandle {
+		if addr != "203.0.113.1:7144" {
+			t.Fatalf("factory addr = %q", addr)
+		}
+		created = &fakeRelay{runCh: make(chan struct{})}
+		return created
+	}
+
+	ch, err := mgr.StartRelay(pcp.GnuID{1}, "203.0.113.1:7144")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.IsBroadcasting() {
+		t.Fatal("relay channel must not be broadcasting")
+	}
+	if ch.UpstreamAddr() != "203.0.113.1:7144" || ch.Source() != "203.0.113.1:7144" {
+		t.Fatalf("upstream/source not set: %q / %q", ch.UpstreamAddr(), ch.Source())
+	}
+	if got, ok := mgr.GetByID(pcp.GnuID{1}); !ok || got != ch {
+		t.Fatal("channel not registered in manager")
+	}
+	if created == nil {
+		t.Fatal("factory not called")
+	}
+	if created.globalIP != 0x01020304 {
+		t.Fatalf("global IP not handed to relay: %x", created.globalIP)
+	}
+	if created.onStopped == nil {
+		t.Fatal("onStopped hook not registered")
+	}
+	select {
+	case <-created.runCh:
+	case <-time.After(time.Second):
+		t.Fatal("Run was not started")
+	}
+
+	// The onStopped hook removes the channel from the manager.
+	created.onStopped()
+	if _, ok := mgr.GetByID(pcp.GnuID{1}); ok {
+		t.Fatal("channel should be removed after relay stops")
+	}
+}
+
+func TestStartRelay_ExistingChannelReturnedWithoutStarting(t *testing.T) {
+	mgr := NewManager(pcp.GnuID{})
+	calls := 0
+	mgr.NewRelay = func(ch *Channel, addr string) RelayHandle {
+		calls++
+		return &fakeRelay{}
+	}
+	first, _ := mgr.StartRelay(pcp.GnuID{1}, "203.0.113.1:7144")
+	second, err := mgr.StartRelay(pcp.GnuID{1}, "203.0.113.2:7144")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("expected the existing channel to be returned")
+	}
+	if calls != 1 {
+		t.Fatalf("factory called %d times, want 1", calls)
+	}
+}
+
+func TestSetGlobalIP_PropagatesToActiveRelays(t *testing.T) {
+	mgr := NewManager(pcp.GnuID{})
+	r := &fakeRelay{}
+	mgr.AddRelayChannel(New(pcp.GnuID{1}, pcp.GnuID{}, 0), r)
+	mgr.SetGlobalIP(0x0a000001)
+	if r.globalIP != 0x0a000001 {
+		t.Fatalf("relay global IP = %x", r.globalIP)
+	}
 }

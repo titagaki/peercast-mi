@@ -90,21 +90,32 @@ func TestCleaner_DisabledWithZeroLimit(t *testing.T) {
 	}
 }
 
-type fakeRelay struct{}
+type fakeRelay struct {
+	globalIP  uint32
+	onStopped func()
+	runCh     chan struct{} // closed when Run is called (nil = don't track)
+	stopped   bool
+}
 
-func (f *fakeRelay) Stop()                {}
-func (f *fakeRelay) SetGlobalIP(_ uint32) {}
+func (f *fakeRelay) Run() {
+	if f.runCh != nil {
+		close(f.runCh)
+	}
+}
+func (f *fakeRelay) Stop()                  { f.stopped = true }
+func (f *fakeRelay) SetGlobalIP(ip uint32)  { f.globalIP = ip }
+func (f *fakeRelay) SetOnStopped(fn func()) { f.onStopped = fn }
 
 type fakeOutput struct {
 	typ    OutputStreamType
 	closed bool
 }
 
-func (f *fakeOutput) NotifyHeader()       {}
-func (f *fakeOutput) NotifyInfo()          {}
-func (f *fakeOutput) NotifyTrack()         {}
-func (f *fakeOutput) Close()               { f.closed = true }
+func (f *fakeOutput) NotifyHeader()          {}
+func (f *fakeOutput) NotifyInfo()            {}
+func (f *fakeOutput) NotifyTrack()           {}
+func (f *fakeOutput) Close()                 { f.closed = true }
 func (f *fakeOutput) Type() OutputStreamType { return f.typ }
-func (f *fakeOutput) ID() int              { return 99 }
-func (f *fakeOutput) RemoteAddr() string   { return "127.0.0.1:0" }
-func (f *fakeOutput) SendRate() int64      { return 0 }
+func (f *fakeOutput) ID() int                { return 99 }
+func (f *fakeOutput) RemoteAddr() string     { return "127.0.0.1:0" }
+func (f *fakeOutput) SendRate() int64        { return 0 }

@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"flag"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,7 +44,6 @@ func main() {
 
 	sessionID := id.NewRandom()
 	broadcastID := id.NewRandom()
-	var globalIP atomic.Uint32
 
 	slog.Info("startup", "session_id", sessionID, "broadcast_id", broadcastID)
 
@@ -56,6 +53,11 @@ func main() {
 	mgr.SetCachePath(cachePath)
 	if err := mgr.LoadCache(); err != nil {
 		slog.Warn("stream key cache: load failed", "err", err)
+	}
+	// Relay clients are created by the manager on demand (see StartRelay);
+	// inject the constructor here to keep channel independent of relay.
+	mgr.NewRelay = func(ch *channel.Channel, upstreamAddr string) channel.RelayHandle {
+		return relay.New(upstreamAddr, ch.ID, sessionID, uint16(cfg.PeercastPort), ch)
 	}
 
 	// Start OutputListener.
@@ -87,9 +89,8 @@ func main() {
 		ypClient := yp.New(hostPort, sessionID, broadcastID, mgr, cfg.PeercastPort, cfg.MaxRelays, cfg.MaxListeners)
 		ypClient.OnGlobalIP = func(ip uint32) {
 			slog.Debug("global IP acquired", "ip", pcp.IPv4FromUint32(ip))
-			globalIP.Store(ip)
 			listener.SetGlobalIP(ip)
-			mgr.SetGlobalIPForRelays(ip)
+			mgr.SetGlobalIP(ip)
 		}
 		ypBumper = ypClient
 		go func() {
@@ -101,25 +102,8 @@ func main() {
 
 	// Wire on-demand relay: auto-start relay when /pls/ is requested with a tip.
 	listener.OnDemandRelay = func(channelID pcp.GnuID, upstreamAddr string) error {
-		if _, ok := mgr.GetByID(channelID); ok {
-			return nil // already relaying
-		}
-		ch := channel.New(channelID, pcp.GnuID{}, 0)
-		ch.SetSource(upstreamAddr)
-		ch.SetUpstreamAddr(upstreamAddr)
-		client := relay.New(upstreamAddr, channelID, sessionID, uint16(cfg.PeercastPort), ch)
-		client.SetGlobalIP(globalIP.Load())
-		// When the relay gives up (all hosts exhausted / tracker off-air),
-		// remove the channel from the manager so a subsequent viewer request
-		// can trigger a fresh OnDemandRelay instead of attaching to a dead
-		// channel whose relay goroutine has already exited.
-		client.SetOnStopped(func() {
-			mgr.Stop(channelID)
-		})
-		mgr.AddRelayChannel(ch, client)
-		go client.Run()
-		slog.Info("pls: auto-relay started", "addr", upstreamAddr, "channel", hex.EncodeToString(channelID[:]))
-		return nil
+		_, err := mgr.StartRelay(channelID, upstreamAddr)
+		return err
 	}
 
 	// Wire JSON-RPC API handler into the listener.

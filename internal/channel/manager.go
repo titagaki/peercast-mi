@@ -1,8 +1,11 @@
 package channel
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
@@ -12,9 +15,19 @@ import (
 // RelayHandle is implemented by relay.Client. Using an interface here avoids
 // an import cycle between the channel and relay packages.
 type RelayHandle interface {
+	// Run connects to the upstream and blocks until the relay gives up or
+	// Stop is called. It is started on its own goroutine by StartRelay.
+	Run()
 	Stop()
 	SetGlobalIP(ip uint32)
+	// SetOnStopped registers a hook invoked after Run has exited. Called
+	// before Run is started.
+	SetOnStopped(fn func())
 }
+
+// RelayFactory creates a relay client that pulls channel ch from upstreamAddr.
+// It is injected by main so that the channel package does not import relay.
+type RelayFactory func(ch *Channel, upstreamAddr string) RelayHandle
 
 // Manager manages stream keys and active broadcast channels.
 //
@@ -35,6 +48,11 @@ type Manager struct {
 	// should cover for new channels. Packet count is computed from bitrate.
 	// 0 means use DefaultContentBufferSeconds.
 	ContentBufferSeconds float64
+
+	// NewRelay creates relay clients for StartRelay. Nil disables on-demand relay.
+	NewRelay RelayFactory
+
+	globalIP atomic.Uint32 // learned from YP; handed to new relay clients
 
 	mu            sync.RWMutex
 	byID          map[pcp.GnuID]*Channel
@@ -159,11 +177,48 @@ func (m *Manager) StopAll() {
 
 // AddRelayChannel registers a channel that receives data from an upstream node
 // via a relay client. The relay client must be started separately.
+// Prefer StartRelay; this exists for tests and callers that manage the
+// relay lifecycle themselves.
 func (m *Manager) AddRelayChannel(ch *Channel, r RelayHandle) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.byID[ch.ID] = ch
 	m.relays[ch.ID] = r
+}
+
+// ErrNoRelayFactory is returned by StartRelay when NewRelay is not set.
+var ErrNoRelayFactory = errors.New("channel: relay factory not configured")
+
+// StartRelay creates a relay channel for channelID sourced from upstreamAddr,
+// registers it, and starts its relay client. If the channel is already
+// active (broadcast or relay) it is returned as-is and nothing is started.
+//
+// When the relay client gives up (all hosts exhausted / tracker off-air) the
+// channel is removed from the manager so that a subsequent viewer request
+// can start a fresh relay instead of attaching to a dead channel.
+func (m *Manager) StartRelay(channelID pcp.GnuID, upstreamAddr string) (*Channel, error) {
+	if m.NewRelay == nil {
+		return nil, ErrNoRelayFactory
+	}
+	m.mu.Lock()
+	if ch, ok := m.byID[channelID]; ok {
+		m.mu.Unlock()
+		return ch, nil
+	}
+	ch := New(channelID, pcp.GnuID{}, 0)
+	// Set fields directly: ch is not yet visible to other goroutines.
+	ch.source = upstreamAddr
+	ch.upstreamAddr = upstreamAddr
+	r := m.NewRelay(ch, upstreamAddr)
+	r.SetGlobalIP(m.globalIP.Load())
+	r.SetOnStopped(func() { m.Stop(channelID) })
+	m.byID[channelID] = ch
+	m.relays[channelID] = r
+	m.mu.Unlock()
+
+	go r.Run()
+	slog.Info("relay: started", "addr", upstreamAddr, "channel", channelID)
+	return ch, nil
 }
 
 // GetByStreamKey returns the active channel for the given stream key, if any.
@@ -224,8 +279,11 @@ func (m *Manager) TotalSendRate() int64 {
 	return total
 }
 
-// SetGlobalIPForRelays propagates the global IP to all active relay clients.
-func (m *Manager) SetGlobalIPForRelays(ip uint32) {
+// SetGlobalIP records the node's global IP (learned from the YP) and
+// propagates it to all active relay clients. Relay clients started later
+// receive it via StartRelay.
+func (m *Manager) SetGlobalIP(ip uint32) {
+	m.globalIP.Store(ip)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, r := range m.relays {
