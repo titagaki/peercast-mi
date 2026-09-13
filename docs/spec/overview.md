@@ -307,6 +307,7 @@ type outputBase struct {
 | `nodeExpiry` / `ignoredDuration` | 3m | 上流候補の有効期限 / 失敗ホストの無視期間 |
 | `cleanerInterval` | 5s | Cleaner の巡回間隔 |
 | `maxKnownHosts` | 32 | bcst 経由で蓄積する代替ホストの上限 |
+| `relayBanDuration` | 90s | MakeRelayable で退出させた下流ノードの IP をリレー受付で拒否する期間 |
 
 ---
 

@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"net"
 	"sync"
 	"time"
 
@@ -49,6 +50,10 @@ type BcstForwarder interface {
 type RelayEvictable interface {
 	// IsFirewalled reports whether the remote peer has no open port.
 	IsFirewalled() bool
+	// Evict terminates the stream to free a relay slot. Unlike Close, the
+	// peer is told to look elsewhere (alternative hosts + QUIT+UNAVAILABLE)
+	// rather than to reconnect to the upstream.
+	Evict()
 }
 
 // RelayNodeInfo is implemented by PCP output streams to expose peer details
@@ -95,7 +100,18 @@ type Channel struct {
 	// (alternative relay candidates, downstream listener/relay counts).
 	// It has its own lock; see nodes.go.
 	nodes nodeTable
+
+	// banList maps a remote IP to the time until which its relay requests
+	// are refused without trying to free a slot. Entries are added when a
+	// downstream node is evicted by MakeRelayable so that it cannot bounce
+	// straight back and evict someone else (PeerCastStation 互換: Channel.Ban)。
+	banMu   sync.Mutex
+	banList map[string]time.Time
 }
+
+// relayBanDuration is how long an evicted downstream node is refused.
+// PeerCastStation 互換: BeforeQuitAsync で 90 秒 BAN する。
+const relayBanDuration = 90 * time.Second
 
 // New creates a new Channel. bufSize sets the ContentBuffer ring buffer size;
 // if <= 0, DefaultContentBufferSize is used.
@@ -307,7 +323,8 @@ func (c *Channel) TryAddOutput(o OutputStream, maxRelays, maxListeners int) bool
 }
 
 // MakeRelayable tries to free a relay slot by evicting a firewalled downstream
-// node. Returns true if a slot was freed or was already available.
+// node. Returns true if a slot was freed or was already available. The
+// evicted node's IP is banned for relayBanDuration.
 // PeerCastStation 互換: firewalled なノードを切断して枠を空ける。
 func (c *Channel) MakeRelayable(maxRelays int) bool {
 	if maxRelays <= 0 {
@@ -320,12 +337,13 @@ func (c *Channel) MakeRelayable(maxRelays int) bool {
 	}
 	// Find a firewalled relay to evict.
 	var victim OutputStream
+	var evictable RelayEvictable
 	for _, o := range c.outputs {
 		if o.Type() != OutputStreamPCP {
 			continue
 		}
 		if ev, ok := o.(RelayEvictable); ok && ev.IsFirewalled() {
-			victim = o
+			victim, evictable = o, ev
 			break
 		}
 	}
@@ -333,8 +351,37 @@ func (c *Channel) MakeRelayable(maxRelays int) bool {
 	if victim == nil {
 		return false
 	}
-	victim.Close()
+	if ip, _, err := net.SplitHostPort(victim.RemoteAddr()); err == nil {
+		c.Ban(ip, time.Now().Add(relayBanDuration))
+	}
+	evictable.Evict()
 	return true
+}
+
+// Ban refuses relay requests from key (a remote IP) until the given time.
+func (c *Channel) Ban(key string, until time.Time) {
+	c.banMu.Lock()
+	defer c.banMu.Unlock()
+	if c.banList == nil {
+		c.banList = make(map[string]time.Time)
+	}
+	c.banList[key] = until
+}
+
+// HasBanned reports whether key is currently banned. Expired entries are
+// dropped on lookup.
+func (c *Channel) HasBanned(key string) bool {
+	c.banMu.Lock()
+	defer c.banMu.Unlock()
+	until, ok := c.banList[key]
+	if !ok {
+		return false
+	}
+	if time.Now().Before(until) {
+		return true
+	}
+	delete(c.banList, key)
+	return false
 }
 
 // IsRelayFull reports whether the relay limit has been reached.
@@ -444,11 +491,12 @@ func (c *Channel) AddKnownHost(host *pcp.Atom) {
 	c.nodes.addKnownHost(host)
 }
 
-// SelectSourceHosts returns up to max recently observed Host atoms, newest
-// first. Used by PCPOutputStream when the relay is full to hand out
-// alternative nodes (PeerCastStation 互換: SelectSourceHosts)。
-func (c *Channel) SelectSourceHosts(max int) []*pcp.Atom {
-	return c.nodes.selectSourceHosts(max)
+// SelectSourceHosts returns up to max observed Host atoms for the requester
+// to try next, best candidates first and excluding the requester's own atom.
+// Used by PCPOutputStream when the relay is full to hand out alternative
+// nodes (PeerCastStation 互換: SelectSourceHosts)。
+func (c *Channel) SelectSourceHosts(max int, requester pcp.GnuID, requesterIP uint32) []*pcp.Atom {
+	return c.nodes.selectSourceHosts(max, requester, requesterIP)
 }
 
 // Broadcast forwards a bcst atom to all PCP output streams except the sender

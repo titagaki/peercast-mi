@@ -1,6 +1,8 @@
 package channel
 
 import (
+	"math/rand/v2"
+	"sort"
 	"sync"
 
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -53,25 +55,94 @@ func (n *nodeTable) addKnownHost(host *pcp.Atom) {
 	n.knownHosts = append(n.knownHosts, host)
 }
 
-// selectSourceHosts returns up to max known Host atoms, newest first.
-func (n *nodeTable) selectSourceHosts(max int) []*pcp.Atom {
+// selectSourceHosts returns up to max known Host atoms as alternative relay
+// candidates for the requester, best first. The requester's own Host atom is
+// excluded. Ranking follows PeerCastStation's SelectSourceHosts: a global
+// endpoint, the requester's own address, free relay slots, receiving, fewer
+// hops and more relays score higher, with a random tie-breaker.
+func (n *nodeTable) selectSourceHosts(max int, requester pcp.GnuID, requesterIP uint32) []*pcp.Atom {
 	if max <= 0 {
 		return nil
 	}
 	n.mu.RLock()
 	defer n.mu.RUnlock()
-	count := len(n.knownHosts)
-	if count > max {
-		count = max
+	type scored struct {
+		atom  *pcp.Atom
+		score float64
 	}
-	if count == 0 {
+	cands := make([]scored, 0, len(n.knownHosts))
+	for _, h := range n.knownHosts {
+		if sid, ok := hostSessionID(h); ok && sid == requester {
+			continue
+		}
+		cands = append(cands, scored{h, hostScore(h, requesterIP)})
+	}
+	if len(cands) == 0 {
 		return nil
 	}
-	out := make([]*pcp.Atom, 0, count)
-	for i := len(n.knownHosts) - 1; i >= 0 && len(out) < count; i-- {
-		out = append(out, n.knownHosts[i])
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].score > cands[j].score })
+	if len(cands) > max {
+		cands = cands[:max]
+	}
+	out := make([]*pcp.Atom, len(cands))
+	for i, c := range cands {
+		out[i] = c.atom
 	}
 	return out
+}
+
+// hostScore ranks a Host atom for selectSourceHosts.
+// PeerCastStation 互換 (PCPOutputStream.SelectSourceHosts):
+//
+//	(GlobalEndPoint あり ? 16000 : 0) + (要求元と同じ IP ? 8000 : 0) +
+//	(!IsRelayFull ? 4000 : 0) + (IsReceiving ? 2000 : 0) +
+//	max(10-Hops, 0)*100 + RelayCount*10 + rand
+//
+// The first ip/port pair is the global endpoint; IsRelayFull is the Relay
+// flag being clear; Hops is the uphp atom.
+func hostScore(host *pcp.Atom, requesterIP uint32) float64 {
+	var (
+		ip            uint32
+		hasIP, hasPrt bool
+		flags         byte
+		relays, hops  uint32
+	)
+	for _, c := range host.Children() {
+		switch c.Tag {
+		case pcp.PCPHostIP:
+			if !hasIP {
+				ip, _ = c.GetInt()
+				hasIP = true
+			}
+		case pcp.PCPHostPort:
+			hasPrt = true
+		case pcp.PCPHostFlags1:
+			flags, _ = c.GetByte()
+		case pcp.PCPHostNumRelays:
+			relays, _ = c.GetInt()
+		case pcp.PCPHostUphostHops:
+			hops, _ = c.GetInt()
+		}
+	}
+	hasGlobal := hasIP && hasPrt
+	var score float64
+	if hasGlobal {
+		score += 16000
+	}
+	if hasGlobal && ip == requesterIP {
+		score += 8000
+	}
+	if flags&pcp.PCPHostFlags1Relay != 0 {
+		score += 4000
+	}
+	if flags&pcp.PCPHostFlags1Recv != 0 {
+		score += 2000
+	}
+	if hops < 10 {
+		score += float64((10 - hops) * 100)
+	}
+	score += float64(relays * 10)
+	return score + rand.Float64()
 }
 
 // updateStats records the counts reported by a downstream node.

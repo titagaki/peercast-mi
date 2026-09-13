@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -34,11 +35,12 @@ type PCPOutputStream struct {
 	bcstCh       chan *pcp.Atom
 	globalIP     uint32
 	listenPort   uint16
-	remotePort   uint16 // 下流ピアのポート（0 = firewalled）
-	peerAgent    string // 下流ピアの agent 文字列
-	peerVersion  uint32 // 下流ピアの PCP version
-	maxRelays    int    // per-channel 制限 (0 = unlimited)
-	maxListeners int    // per-channel 制限 (0 = unlimited)
+	remotePort   uint16      // 下流ピアのポート（0 = firewalled）
+	peerAgent    string      // 下流ピアの agent 文字列
+	peerVersion  uint32      // 下流ピアの PCP version
+	maxRelays    int         // per-channel 制限 (0 = unlimited)
+	maxListeners int         // per-channel 制限 (0 = unlimited)
+	evicted      atomic.Bool // MakeRelayable による退出 (closeCh 時の quit 理由を変える)
 }
 
 func newPCPOutputStream(conn *countingConn, br *bufio.Reader, sessionID pcp.GnuID, ch *channel.Channel, id int, globalIP uint32, listenPort uint16, maxRelays, maxListeners int) *PCPOutputStream {
@@ -66,6 +68,14 @@ func (o *PCPOutputStream) IsFirewalled() bool { return o.remotePort == 0 }
 
 // RemotePort returns the downstream peer's listen port (0 if firewalled).
 func (o *PCPOutputStream) RemotePort() uint16 { return o.remotePort }
+
+// Evict implements channel.RelayEvictable: the stream is closed and, instead
+// of the upstream node, the peer receives alternative hosts and
+// QUIT+UNAVAILABLE (PeerCastStation 互換: OnStopped(UnavailableError))。
+func (o *PCPOutputStream) Evict() {
+	o.evicted.Store(true)
+	o.Close()
+}
 
 // PeerAgent returns the downstream peer's agent string from helo.
 func (o *PCPOutputStream) PeerAgent() string { return o.peerAgent }
@@ -209,18 +219,22 @@ func (o *PCPOutputStream) handshake(admitted bool) (startPos uint32, err error) 
 	return startPos, nil
 }
 
-// sendRelayDenied sends the host atom followed by up to 8 alternative relay
-// candidates and a QUIT with PCPErrorUnavailable, used when the relay limit
-// has been reached (PeerCastStation 互換: SelectSourceHosts で候補を返す)。
+// sendRelayDenied sends up to 8 alternative relay candidates followed by
+// QUIT+UNAVAILABLE, used when the relay limit has been reached
+// (PeerCastStation 互換: SelectSourceHosts の候補だけを返し、自ノードは送らない)。
 func (o *PCPOutputStream) sendRelayDenied() {
-	hostAtom := o.buildHostAtom()
-	hostAtom.Write(o.conn)
-	for _, alt := range o.ch.SelectSourceHosts(8) {
+	o.sendAlternativeHostsAndQuit(pcp.PCPErrorQuit + pcp.PCPErrorUnavailable)
+}
+
+// sendAlternativeHostsAndQuit sends up to 8 alternative relay candidates for
+// the peer to try next, followed by QUIT.
+func (o *PCPOutputStream) sendAlternativeHostsAndQuit(code uint32) {
+	for _, alt := range o.ch.SelectSourceHosts(8, o.peerID, ipToUint32(o.conn.RemoteAddr())) {
 		if err := alt.Write(o.conn); err != nil {
 			break
 		}
 	}
-	o.sendQuit(pcp.PCPErrorQuit + pcp.PCPErrorUnavailable)
+	o.sendQuit(code)
 }
 
 // sendInitial sends chan (info, trck, head pkt) and host atoms.
@@ -309,6 +323,11 @@ func (o *PCPOutputStream) streamLoop(reqPos uint32) {
 
 		select {
 		case <-o.closeCh:
+			if o.evicted.Load() {
+				slog.Info("pcp: evicted to free a relay slot", "remote", o.remoteAddr, "id", o.id)
+				o.sendAlternativeHostsAndQuit(pcp.PCPErrorQuit + pcp.PCPErrorUnavailable)
+				return
+			}
 			slog.Debug("pcp: closed by readLoop", "remote", o.remoteAddr, "id", o.id)
 			o.sendUpstreamHostAndQuit(pcp.PCPErrorQuit + pcp.PCPErrorShutdown)
 			return

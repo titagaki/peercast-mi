@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
@@ -218,5 +219,63 @@ func TestPCPOutputStream_Close_SignalsCloseCh(t *testing.T) {
 		// OK
 	default:
 		t.Error("closeCh: expected closed after Close")
+	}
+}
+
+// TestPCPOutputStream_Evict_SendsAlternativesAndUnavailable は MakeRelayable による
+// 退出時に、上流ノードではなく代替候補 (要求元自身を除く) と QUIT+UNAVAILABLE を
+// 送ることを確認する。
+func TestPCPOutputStream_Evict_SendsAlternativesAndUnavailable(t *testing.T) {
+	out, peer := newTestOutputStream(t)
+	defer peer.Close()
+	out.peerID = pcp.GnuID{1}
+	out.ch.SetUpstreamNodeInfo(pcp.GnuID{9}, 0x0a000009, 7144)
+	out.ch.AddKnownHost(pcp.NewParentAtom(pcp.PCPHost, pcp.NewIDAtom(pcp.PCPHostID, pcp.GnuID{1}))) // 要求元自身
+	out.ch.AddKnownHost(pcp.NewParentAtom(pcp.PCPHost, pcp.NewIDAtom(pcp.PCPHostID, pcp.GnuID{2})))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		out.streamLoop(0)
+	}()
+	out.Evict()
+
+	host, err := pcp.ReadAtom(peer)
+	if err != nil {
+		t.Fatalf("read host: %v", err)
+	}
+	if host.Tag != pcp.PCPHost {
+		t.Fatalf("first atom = %v, want host", host.Tag)
+	}
+	if sid, _ := host.FindChild(pcp.PCPHostID).GetID(); sid != (pcp.GnuID{2}) {
+		t.Fatalf("host sid = %v, want the other node (not requester, not upstream)", sid)
+	}
+	quit, err := pcp.ReadAtom(peer)
+	if err != nil {
+		t.Fatalf("read quit: %v", err)
+	}
+	if quit.Tag != pcp.PCPQuit {
+		t.Fatalf("second atom = %v, want quit", quit.Tag)
+	}
+	if code, _ := quit.GetInt(); code != pcp.PCPErrorQuit+pcp.PCPErrorUnavailable {
+		t.Fatalf("quit code = %d, want QUIT+UNAVAILABLE", code)
+	}
+	<-done
+}
+
+// TestCanAdmitRelay_Banned は BAN 中の IP からのリレー要求を枠の有無にかかわらず拒否することを確認する。
+func TestCanAdmitRelay_Banned(t *testing.T) {
+	l := &Listener{mgr: channel.NewManager(pcp.GnuID{}), maxRelays: 10}
+	ch := channel.New(pcp.GnuID{1}, pcp.GnuID{}, 0)
+	remote := &net.TCPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 51000}
+	if !l.canAdmitRelay(ch, remote) {
+		t.Fatal("unbanned remote with free slots must be admitted")
+	}
+	ch.Ban("10.0.0.2", time.Now().Add(time.Minute))
+	if l.canAdmitRelay(ch, remote) {
+		t.Fatal("banned remote must be refused")
+	}
+	if !l.canAdmitRelay(ch, &net.TCPAddr{IP: net.IPv4(10, 0, 0, 3), Port: 51000}) {
+		t.Fatal("other remote must still be admitted")
 	}
 }

@@ -15,7 +15,6 @@
 
 ### 機能
 
-- [ ] リレー満杯時の代替ホスト案内に BAN リストを反映する (PeerCastStation は BAN したホストを候補から除く。peercast-mi に BAN 機構がない) — [decisions/peercaststation-compat.md](decisions/peercaststation-compat.md)
 - [ ] HTTP 直接視聴の ICY メタデータ (`icy-metaint`) — [spec/components.md 4.9](spec/components.md)
 - [ ] push (GIV) 接続の対応範囲を再検討するかどうか — 現状は対象外 ([decisions/0003](decisions/0003-no-push-connection.md))
 

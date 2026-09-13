@@ -166,7 +166,7 @@ func (l *Listener) handlePCPRelay(cc *countingConn, br *bufio.Reader, peek []byt
 	h := newPCPOutputStream(cc, br, l.sessionID, ch, id, l.globalIP.Load(), uint16(l.port), l.maxRelays, l.maxListeners)
 
 	// Check admission before handshake to determine HTTP status code (200 vs 503).
-	admitted := l.canAdmitRelay(ch)
+	admitted := l.canAdmitRelay(ch, cc.RemoteAddr())
 	startPos, err := h.handshake(admitted)
 	if err != nil {
 		slog.Error("pcp: handshake error", "remote", cc.RemoteAddr(), "id", id, "err", err)
@@ -279,16 +279,22 @@ func (l *Listener) handleHTTPStream(cc *countingConn, br *bufio.Reader, peek []b
 	ch.RemoveOutput(h)
 }
 
-// canAdmitRelay checks whether a new PCP relay can be accepted, attempting
-// to evict a firewalled downstream node if per-channel relay slots are full.
+// canAdmitRelay checks whether a new PCP relay from remote can be accepted,
+// attempting to evict a firewalled downstream node if per-channel relay slots
+// are full. A remote IP that was itself evicted recently is refused outright
+// (PeerCastStation 互換: MakeRelayable(key) は BAN 中なら false)。
 // Used to determine the HTTP status code (200 vs 503) before the PCP handshake.
-func (l *Listener) canAdmitRelay(ch *channel.Channel) bool {
+func (l *Listener) canAdmitRelay(ch *channel.Channel, remote net.Addr) bool {
 	l.admitMu.Lock()
 	defer l.admitMu.Unlock()
 	if l.maxRelaysTotal > 0 && l.mgr.TotalRelays() >= l.maxRelaysTotal {
 		return false
 	}
 	if l.isUpstreamFull() {
+		return false
+	}
+	if tcp, ok := remote.(*net.TCPAddr); ok && ch.HasBanned(tcp.IP.String()) {
+		slog.Info("pcp: rejected (banned)", "remote", remote)
 		return false
 	}
 	// Try to evict a firewalled relay if per-channel limit is reached.

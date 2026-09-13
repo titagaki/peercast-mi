@@ -255,6 +255,10 @@ type Channel struct {
 
     // BCST HOST 経由で学習した他ノードの情報 (nodes.go)。独自のロックを持つ leaf。
     nodes nodeTable
+
+    // MakeRelayable で退出させた下流ノードの IP → BAN 期限。BAN 中の IP からのリレー要求は即拒否
+    banMu   sync.Mutex
+    banList map[string]time.Time
 }
 
 // nodeTable (channel/nodes.go)
@@ -272,6 +276,16 @@ type nodeTable struct {
 `ContentBuffer` は private フィールド `buffer` として保持する。外部からは `Channel` の委譲メソッド (`HasData`, `Header`, `Signal`, `Since`, `OldestPos`, `NewestPos`, `Write`, `SetHeader`) 経由でアクセスする。
 
 `Broadcast` メソッドは `OutputStream` を `BcstForwarder` に型アサーションし、bcst アトム転送を行う。`BcstForwarder` を実装しない HTTPOutputStream はスキップされる。同一ピア（同じ `PeerID()`）の別接続にも転送しない（ループ防止）。
+
+`MakeRelayable` は `OutputStream` を `RelayEvictable` (`IsFirewalled()` / `Evict()`) に型アサーションし、firewalled な PCP 出力ストリームを 1 つ `Evict()` する。退出させたノードの IP は `relayBanDuration` (90 秒) の間 `HasBanned` が true になる。
+
+`SelectSourceHosts` は `knownHosts` から requester の session ID を持つものを除き、次のスコアの降順に並べて最大 `max` 件を返す (`nodeTable.selectSourceHosts`)。Host アトムの最初の ip/port ペアを global endpoint、`flg1` の Relay ビットが落ちていれば relay full、`uphp` を hops として読む。
+
+```
+(global endpoint あり ? 16000 : 0) + (requesterIP と同じ IP ? 8000 : 0) +
+(relay full でない ? 4000 : 0) + (Recv フラグあり ? 2000 : 0) +
+max(10 - hops, 0) * 100 + numr * 10 + rand[0,1)
+```
 
 ### メソッド
 
@@ -303,7 +317,9 @@ func (c *Channel) NewestPos() uint32
 // OutputStream 管理
 func (c *Channel) AddOutput(o OutputStream)
 func (c *Channel) TryAddOutput(o OutputStream, maxRelays, maxListeners int) bool
-func (c *Channel) MakeRelayable(maxRelays int) bool // firewalled な下流を 1 つ切断して枠を空ける
+func (c *Channel) MakeRelayable(maxRelays int) bool // firewalled な下流を 1 つ Evict() して枠を空け、その IP を 90 秒 BAN する
+func (c *Channel) Ban(key string, until time.Time)   // key (リモート IP) を until まで BAN
+func (c *Channel) HasBanned(key string) bool         // BAN 中か (期限切れは削除して false)
 func (c *Channel) RemoveOutput(o OutputStream)
 func (c *Channel) NumListeners() int
 func (c *Channel) NumRelays() int
@@ -319,7 +335,7 @@ func (c *Channel) Connections() []ConnectionInfo
 func (c *Channel) RelayNodes() []RelayNodeEntry // 下流 PCP ピアの一覧 (getChannelRelayTree 用)
 func (c *Channel) CloseConnection(id int) bool
 func (c *Channel) AddKnownHost(host *pcp.Atom)
-func (c *Channel) SelectSourceHosts(max int) []*pcp.Atom
+func (c *Channel) SelectSourceHosts(max int, requester pcp.GnuID, requesterIP uint32) []*pcp.Atom // requester 自身を除きスコア順に最大 max 件
 func (c *Channel) Broadcast(from OutputStream, atom *pcp.Atom) // BcstForwarder 型アサーションで転送
 ```
 
@@ -516,7 +532,7 @@ bcst
 2. `max_upstream_kbps` (全チャンネル合計の送信レート)
 3. per-channel: `Channel.TryAddOutput(o, max_relays, max_listeners)`
 
-PCP リレーは handshake 前に `canAdmitRelay` で判定して HTTP 200/503 を決め (満杯時は `Channel.MakeRelayable` で firewalled な下流の退出を試みる)、handshake 後にもう一度 `tryAdmit` で確定する。
+PCP リレーは handshake 前に `canAdmitRelay` で判定して HTTP 200/503 を決め、handshake 後にもう一度 `tryAdmit` で確定する。`canAdmitRelay` は 1, 2 の後、接続元 IP が `Channel.HasBanned` なら拒否し、そうでなければ `Channel.MakeRelayable` で firewalled な下流の退出を試みる (退出させた下流の IP は 90 秒 BAN される)。
 
 ---
 
@@ -534,7 +550,8 @@ Listener.handlePCPRelay():
   2. canAdmitRelay() で受け入れ可否を先に判定 (HTTP 200 / 503 の決定に使う)
   3. handshake(admitted)
   4. 拒否 (503) の場合: sendRelayDenied() → 切断
-       自ノードの host アトム → 代替候補 host アトム最大 8 件 (SelectSourceHosts) → quit(QUIT+UNAVAILABLE)
+       代替候補 host アトム最大 8 件 (SelectSourceHosts、要求元自身を除きスコア順) → quit(QUIT+UNAVAILABLE)
+       (自ノードの host アトムは送らない)
   5. tryAdmit() で Channel に登録 (handshake 中に枠が埋まっていれば 4 と同じく拒否)
   6. runStreaming(startPos)
 
@@ -585,6 +602,7 @@ streamLoop():
      - headerCh 通知時: chan > pkt(type=head) を送信
      - bcstCh: bcst アトムを下流に転送
      - closeCh (readLoop からの quit / Close()): 上流ノード情報を host アトムで送ってから quit(QUIT+SHUTDOWN)
+     - closeCh (MakeRelayable からの Evict()): 代替候補 host アトム最大 8 件 (SelectSourceHosts) を送ってから quit(QUIT+UNAVAILABLE)
 ```
 
 ### x-peercast-pos による開始位置

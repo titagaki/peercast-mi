@@ -86,13 +86,33 @@ PeerCastStation はリレーリクエスト時に `channel.Status != SourceStrea
 
 #### リレー満杯時に 503 + HOST リスト + QUIT を返す
 
-PeerCastStation は `MakeRelayable()` で空きを作れない場合、HTTP 503 を返し、helo/oleh 交換後に代替ホストリストを送信して `QUIT + UNAVAILABLE` で切断する。admission 判定を handshake 前に行い、満杯時は HTTP 503 を返して helo/oleh 交換後に自ノード情報を HOST として送信し `QUIT + UNAVAILABLE` で切断するよう変更済み。BAN リストは未実装 (peercast-mi に BAN 機構がないため)。
+PeerCastStation は `MakeRelayable()` で空きを作れない場合、HTTP 503 を返し、helo/oleh 交換後に代替ホストリストを送信して `QUIT + UNAVAILABLE` で切断する。admission 判定を handshake 前に行い、満杯時は HTTP 503 を返して helo/oleh 交換後に代替ホストリストを送信し `QUIT + UNAVAILABLE` で切断するよう変更済み。以前は代替候補の前に自ノードの HOST も送っていたが、PeerCastStation は送らないので削除した (要求元は接続先として自ノードを既に知っており、満杯であることも 503 で伝わっている)。
+
+代替ホストの選択は `SelectSourceHosts` と同じ基準で行う。要求元自身の SessionID を除き、以下のスコアの降順で最大 8 件を返す (`nodeTable.selectSourceHosts`)。
+
+```
+(GlobalEndPoint あり ? 16000 : 0) + (要求元と同じ IP ? 8000 : 0) +
+(!IsRelayFull ? 4000 : 0) + (IsReceiving ? 2000 : 0) +
+max(10 - Hops, 0) * 100 + RelayCount * 10 + rand
+```
+
+Host アトムの最初の ip/port ペアを GlobalEndPoint、`flg1` の Relay ビットが落ちていれば IsRelayFull、`uphp` を Hops として読む。PeerCastStation は候補から BAN 済みホストを除外しない (BAN リストの用途は次項)。
 
 - 参照: `PCPOutputStream.cs` DoHandshake → `isRelayFull` 時に `SelectSourceHosts` → `SendHost` → `HandshakeErrorException(UnavailableError)`
+- 参照: `PCPOutputStream.cs` SelectSourceHosts (`channel.Nodes` のスコア順)
+
+#### 追い出した下流ノードの一時 BAN
+
+PeerCastStation は `MakeRelayable()` で切断した下流ノードの IP を 90 秒間 BAN し (`Channel.Ban`)、その IP からのリレー要求は `MakeRelayable(key, local)` で BAN 中なら枠を空ける処理をせず即 `false` (満杯扱い) にする。追い出されたノードが即座に再接続して別のノードを追い出す、というループの抑止が目的。切断される側には代替ホストリストと `QUIT + UNAVAILABLE` を送る。
+
+`Channel.Ban` / `HasBanned` (チャンネル単位、キーはリモート IP、期限 `relayBanDuration` = 90 秒) を追加し、`MakeRelayable` が退出させたノードの IP を BAN、`canAdmitRelay` で `HasBanned` なら `MakeRelayable` を呼ばずに拒否するよう変更済み。退出時の切断は `RelayEvictable.Evict()` 経由で行い、`PCPOutputStream` は代替ホストと `QUIT + UNAVAILABLE` を送る (ユーザー操作や下流からの quit による切断では従来どおり上流ノード情報と `QUIT + SHUTDOWN`)。
+
+- 参照: `Channel.cs` `Ban` / `HasBanned` / `MakeRelayable(string key, bool local)`
+- 参照: `PCPOutputStream.cs` ProcessStream → `channel.MakeRelayable(remoteEndPoint.Address.ToString(), ...)`、BeforeQuitAsync → `StopReason.UnavailableError` なら `channel.Ban(..., Now + 90s)` → `SelectSourceHosts` → `SendHost`
 
 #### 劣勢リレー接続の強制切断 (MakeRelayable)
 
-PeerCastStation はリレー枠が満杯でも、firewalled またはリレー能力がない下流ノードを切断して枠を空ける。`Channel.MakeRelayable(maxRelays)` を追加し、`canAdmitRelay` で呼び出し、firewalled (remotePort == 0) な PCP 出力ストリームを 1 つ退出させる。`PCPOutputStream` は `helo.Ping` と `helo.Port` の結果を `remotePort` に保持し、`IsFirewalled()` で判定。
+PeerCastStation はリレー枠が満杯でも、firewalled またはリレー能力がない下流ノードを切断して枠を空ける。`Channel.MakeRelayable(maxRelays)` を追加し、`canAdmitRelay` で呼び出し、firewalled (remotePort == 0) な PCP 出力ストリームを 1 つ退出させる。`PCPOutputStream` は `helo.Ping` と `helo.Port` の結果を `remotePort` に保持し、`IsFirewalled()` で判定。退出させたノードの扱いは「追い出した下流ノードの一時 BAN」を参照。
 
 - 参照: `Channel.cs` MakeRelayable → `IsFirewalled || (IsRelayFull && LocalRelays < 1)` な sink を `OnStopped(UnavailableError)` で切断
 
