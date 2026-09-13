@@ -343,7 +343,7 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 ```
 
 どちらの形式でも同じチャンネルが対象となり、処理内容は同一。
-YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場合は no-op。
+YP への bcst を即時送信する（`YPClient.Bump()`）。送信対象は指定チャンネルに限らず、ブロードキャスト中の全チャンネル。YP 未設定の場合は no-op。
 
 **返却値:** `null`
 
@@ -507,4 +507,4 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。YP 未設定の場
 - `getChannelStatus.status` は `"Receiving"` (データ受信中) または `"Idle"` (未受信)。
 - `getChannelConnections` の `recvRate` は常に `0`（受信レートの計測は未実装）。
 - `getChannelRelayTree` の `address` は空文字列（グローバル IP 未取得）。
-- リレーチャンネルでも `bumpChannel` は機能する（YP への bcst が送信される）。
+- リレーチャンネルに対する `bumpChannel` も `null` を返して成功するが、リレーチャンネルは YP に bcst しないので、送られるのはブロードキャストチャンネルの分だけ。
