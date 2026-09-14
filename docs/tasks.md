@@ -15,7 +15,7 @@
 
 ### 機能
 
-- [ ] X アプリ・公開 HTTPS / RTMPS を設定し、実ログイン、OBS → サイト視聴、他ノードへの公開 PCP 中継を結合検証する — [導入手順](spec/site.md)、[実装記録](reviews/2026-09-14-site-implementation.md)。秘密情報・公開 URL は利用環境で設定する。`yayaue.me/mi/` 向けのローカル設定は追加済み、本番適用と公開RTMPSは未実施 — [サブパス検証](reviews/2026-09-14-site-base-path.md)
+- [ ] X アプリ・公開 HTTPS / RTMP を設定し、実ログイン、OBS → サイト視聴、他ノードへの公開 PCP 中継を結合検証する — [導入手順](spec/site.md)、[実装記録](reviews/2026-09-14-site-implementation.md)。秘密情報・公開 URL は利用環境で設定する。`yayaue.me/mi/` 向けのローカル設定は追加済み、本番適用は未実施。OBS入力はユーザー指定により公開RTMP＋ストリームキー認証 — [サブパス検証](reviews/2026-09-14-site-base-path.md)
 - [ ] 視聴サイトを拡充する: お気に入り同期、HLS とスマホ実機検証、通知 — [比較表](reviews/2026-09-14-peca-live-viewing-auth-design.md)。外部 YP 一覧は [ADR 0021](decisions/0021-yp-channel-directory.md)、掲示板閲覧は [ADR 0022](decisions/0022-viewing-pages-and-comments.md) で追加済み
 - [ ] 公開運用に合わせて利用者別レート制限 / 帯域割当、アカウント停止と既存配信接続の切断を設計する — [ADR 0019](decisions/0019-authenticated-site.md)。現在は X ログイン成功者が利用可、視聴の同時接続数を制限
 

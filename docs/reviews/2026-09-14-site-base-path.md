@@ -40,3 +40,11 @@ Dockerの `npm ci` は既存と同数のaudit指摘9件を出した。依存バ�
 本番のソース配置・X資格情報設定・callback登録・7154到達性・Ansible適用、実ログイン、OBS配信と他ノードとの相互接続。公開RTMPS終端は未構成。詳細な導入手順はインフラリポジトリの `ansible/README.md` に記載した。
 
 判断は [ADR 0023](../decisions/0023-site-base-path.md)、動作は [サイト仕様](../spec/site.md#サブパスへの配置) を参照。
+
+## 公開 RTMP への変更
+
+2026-09-14 追記: ユーザーが OBS の入力を RTMP とストリームキー認証に指定したため、上記の暫定SSHトンネル構成を変更した。Compose のホスト公開を `1945:1945`、サイトの案内URLを `rtmp://yayaue.me:1945/live` に変更し、インフラの手順書にも反映した。RTMPS は今回の導入対象外。
+
+認証は既存の `internal/rtmp/server.go` の `OnPublish` が `Manager.IsIssuedKey` で検証し、未発行のキーを拒否する。Go実装の変更はない。本番への適用・実OBS接続は未実施。
+
+変更後の検証: `go test ./internal/rtmp -run '^TestOnPublish_'`、ダミー値によるComposeの `config -q`、両リポジトリの `git diff --check` が成功。Caddy・Ansibleの実装変更はなく、本番操作は行っていない。
