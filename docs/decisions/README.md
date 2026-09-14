@@ -37,4 +37,5 @@
 | [0022](0022-viewing-pages-and-comments.md) | ページ分離・自動再生・掲示板コメント閲覧 | 採用 |
 | [0023](0023-site-base-path.md) | サイトの公開パスを明示設定する | 採用 |
 | [0024](0024-site-admin-x-allowlist.md) | 指定Xユーザーだけにサイト管理APIを提供する | 採用 |
+| [0025](0025-mobile-stream-keys.md) | サイト発行キーを小文字英字2文字＋数字4桁にする | 採用 |
 | [peercaststation-compat](peercaststation-compat.md) | PeerCastStation との挙動合わせ (複数項目) | 採用 |

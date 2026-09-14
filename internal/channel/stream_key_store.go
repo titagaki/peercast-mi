@@ -2,12 +2,15 @@ package channel
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"sort"
 	"sync"
 )
+
+var ErrStreamKeyAssigned = errors.New("stream key already assigned")
 
 // StreamKeyStore manages the mapping between account names and stream keys.
 // Stream keys are long-lived: issuing a key and stopping a channel that uses
@@ -93,7 +96,7 @@ func (s *StreamKeyStore) IssueStreamKey(accountName, streamKey string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if owner, ok := s.streamKeys[streamKey]; ok && owner != accountName {
-		return fmt.Errorf("stream key already assigned")
+		return ErrStreamKeyAssigned
 	}
 	oldKey, existed := s.accounts[accountName]
 	if oldKey, ok := s.accounts[accountName]; ok {

@@ -39,10 +39,12 @@ type Server struct {
 // rejected in OnPublish.
 func NewServer(mgr ChannelManager, port int) *Server {
 	s := &Server{port: port}
+	attempts := newPublishLimiter()
 	s.srv = gortmp.NewServer(&gortmp.ServerConfig{
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *gortmp.ConnConfig) {
 			slog.Info("rtmp: encoder connected", "remote", conn.RemoteAddr())
 			h := newHandler(mgr, conn.RemoteAddr().String())
+			h.publishLimiter = attempts
 			return conn, &gortmp.ConnConfig{Handler: h}
 		},
 	})
@@ -75,9 +77,10 @@ func (s *Server) Close() {
 
 type handler struct {
 	gortmp.DefaultHandler
-	mgr        ChannelManager
-	remoteAddr string
-	streamKey  string // set in OnPublish; empty until then
+	mgr            ChannelManager
+	remoteAddr     string
+	publishLimiter *publishLimiter
+	streamKey      string // set in OnPublish; empty until then
 
 	// Accumulated sequence headers and metadata.
 	metaTag []byte // onMetaData FLV tag (timestamp zeroed)
@@ -122,6 +125,9 @@ func (h *handler) ch() *channel.Channel {
 // unknown.
 func (h *handler) OnPublish(_ *gortmp.StreamContext, _ uint32, cmd *message.NetStreamPublish) error {
 	key := cmd.PublishingName
+	if isShortStreamKey(key) && h.publishLimiter != nil && !h.publishLimiter.allow(h.remoteAddr) {
+		return fmt.Errorf("rtmp: too many short-key attempts; retry in one minute")
+	}
 	if !h.mgr.IsIssuedKey(key) {
 		slog.Warn("rtmp: rejected unknown stream key", "remote", h.remoteAddr)
 		return fmt.Errorf("rtmp: stream key not issued")

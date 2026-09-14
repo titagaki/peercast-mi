@@ -33,6 +33,8 @@ peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp
 
 ## reviews/
 
+- [2026-09-14-mobile-stream-keys.md](reviews/2026-09-14-mobile-stream-keys.md) — スマホ向け短い配信キーとRTMP試行制限の検証
+
 - [2026-09-14-broadcast-fields.md](reviews/2026-09-14-broadcast-fields.md) — 配信フォームのコメント・URL・ビットレート復元
 
 - [2026-09-14-site-admin-connection.md](reviews/2026-09-14-site-admin-connection.md) — 本番管理パネルのAPI接続不具合と修正候補

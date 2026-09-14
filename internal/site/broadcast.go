@@ -3,6 +3,7 @@ package site
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -84,8 +85,8 @@ func (s *Server) rotateKey(w http.ResponseWriter, r *http.Request, ss *session) 
 		http.Error(w, "キー発行数の上限です。管理者に連絡してください。", 503)
 		return
 	}
-	key := randomToken()
-	if err := s.mgr.IssueStreamKey(account(ss), key); err != nil {
+	key, err := s.issueShortKey(account(ss), old, shortStreamKey)
+	if err != nil {
 		http.Error(w, "キーを保存できませんでした。", 500)
 		return
 	}
@@ -156,4 +157,26 @@ func (s *Server) stopBroadcast(w http.ResponseWriter, r *http.Request, ss *sessi
 		s.bump()
 	}
 	reply(w, map[string]bool{"ok": true})
+}
+
+// The store performs the final collision check atomically with persistence;
+// administrative key issuance may run concurrently with website requests.
+func (s *Server) issueShortKey(owner, old string, generate func() (string, error)) (string, error) {
+	for attempt := 0; attempt < 128; attempt++ {
+		key, err := generate()
+		if err != nil {
+			return "", err
+		}
+		if key == old || s.mgr.IsIssuedKey(key) {
+			continue
+		}
+		if err := s.mgr.IssueStreamKey(owner, key); err != nil {
+			if errors.Is(err, channel.ErrStreamKeyAssigned) {
+				continue
+			}
+			return "", err
+		}
+		return key, nil
+	}
+	return "", errors.New("could not allocate an unused stream key")
 }

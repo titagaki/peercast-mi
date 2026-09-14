@@ -346,6 +346,10 @@ function Broadcast({ csrf }: { csrf: string }) {
               </p>
             </>
           )}
+          <p className="muted">
+            新しく発行するキーは小文字の英字2文字＋数字4桁です（例:
+            ab1234）。既存のキーをこの形式に変える場合は、配信停止後に再発行してください。
+          </p>
           <button
             disabled={action.busy || own.loading || !!own.data.channel}
             onClick={() => {
