@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"github.com/titagaki/peercast-mi/internal/relay"
 	"github.com/titagaki/peercast-mi/internal/rtmp"
 	"github.com/titagaki/peercast-mi/internal/servent"
+	"github.com/titagaki/peercast-mi/internal/site"
 	"github.com/titagaki/peercast-mi/internal/yp"
 )
 
@@ -58,6 +61,10 @@ func main() {
 	cachePath := filepath.Join(filepath.Dir(*configPath), "stream_keys.json")
 	mgr.SetCachePath(cachePath)
 	if err := mgr.LoadCache(); err != nil {
+		if cfg.Site.Enabled {
+			slog.Error("site: cannot load stream key cache", "err", err)
+			os.Exit(1)
+		}
 		slog.Warn("stream key cache: load failed", "err", err)
 	}
 	// Relay clients are created by the manager on demand (see StartRelay);
@@ -76,6 +83,16 @@ func main() {
 		os.Exit(1)
 	}
 	listener.RelayRequestFromAny = relayFromAny
+	// Configure the website's HTTP viewing gate before accepting any traffic.
+	var website *site.Server
+	if cfg.Site.Enabled {
+		website, err = site.New(cfg.Site, mgr, cfg.PeercastPort, nil)
+		if err != nil {
+			slog.Error("site: invalid configuration", "err", err)
+			os.Exit(1)
+		}
+		listener.ViewerToken = website.ViewerToken()
+	}
 	if err := listener.Listen(); err != nil {
 		slog.Error("output: listen failed", "err", err)
 		os.Exit(1)
@@ -144,6 +161,27 @@ func main() {
 	apiServer := jsonrpc.New(sessionID, mgr, cfg, ypBumper)
 	listener.SetAPIHandler(apiServer.Handler())
 	slog.Info("api: JSON-RPC ready", "port", cfg.PeercastPort)
+	if website != nil {
+		website.SetBump(func() {
+			if ypBumper != nil {
+				ypBumper.Bump()
+			}
+		})
+		ln, err := net.Listen("tcp", website.ListenAddress())
+		if err != nil {
+			slog.Error("site: listen failed", "err", err)
+			os.Exit(1)
+		}
+		srv := &http.Server{Handler: website.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+		go func() {
+			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+				slog.Error("site: server stopped", "err", err)
+				stop()
+			}
+		}()
+		defer srv.Close()
+		slog.Info("site: listening", "address", website.ListenAddress())
+	}
 
 	// Start channel cleaner for idle relay channels.
 	if cfg.ChannelCleanupMinutes > 0 {

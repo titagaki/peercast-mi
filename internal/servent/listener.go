@@ -3,6 +3,7 @@ package servent
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -52,6 +53,9 @@ type Listener struct {
 	nextConnID      atomic.Int64
 	apiHandler      http.Handler      // JSON-RPC handler for POST /api/; may be nil
 	OnDemandRelay   OnDemandRelayFunc // optional: auto-start relay on /pls/ and /stream/ requests
+	// When set before Serve, HTTP viewing is reserved for the site's internal
+	// proxy. PCP relay traffic remains public. Never send this token to clients.
+	ViewerToken string
 	// RelayRequestFromAny lets any remote start an on-demand relay. When
 	// false (the default from config) only loopback and private addresses
 	// may; other remotes get 403 for unknown channels, like
@@ -220,9 +224,10 @@ const (
 // on. It is parsed once by parseViewerRequest so that a handler never reads
 // the request a second time.
 type viewerRequest struct {
-	channelID pcp.GnuID
-	tip       string // validated "host:port", or "" when absent
-	host      string // Host header, or "" when absent
+	channelID     pcp.GnuID
+	tip           string // validated "host:port", or "" when absent
+	host          string // Host header, or "" when absent
+	authorization string
 }
 
 // parseViewerRequest reads one HTTP request and extracts the channel ID from
@@ -244,7 +249,11 @@ func parseViewerRequest(br *bufio.Reader, prefix string) (viewerRequest, string,
 	if !ok {
 		return viewerRequest{}, statusBadRequest, nil
 	}
-	return viewerRequest{channelID: channelID, tip: tip, host: req.Host}, "", nil
+	return viewerRequest{channelID: channelID, tip: tip, host: req.Host, authorization: req.Header.Get("Authorization")}, "", nil
+}
+
+func (l *Listener) viewerAllowed(vr viewerRequest) bool {
+	return l.ViewerToken == "" || subtle.ConstantTimeCompare([]byte(vr.authorization), []byte("Bearer "+l.ViewerToken)) == 1
 }
 
 // parseChannelIDPath extracts the channel ID from a URL path of the form
@@ -336,6 +345,10 @@ func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader) {
 	defer cc.Close()
 
 	vr, status, err := parseViewerRequest(br, "/pls/")
+	if err == nil && !l.viewerAllowed(vr) {
+		io.WriteString(cc, statusForbidden)
+		return
+	}
 	if err != nil {
 		return
 	}
@@ -376,6 +389,11 @@ func (l *Listener) handlePLS(cc *countingConn, br *bufio.Reader) {
 
 func (l *Listener) handleHTTPStream(cc *countingConn, br *bufio.Reader) {
 	vr, status, err := parseViewerRequest(br, "/stream/")
+	if err == nil && !l.viewerAllowed(vr) {
+		io.WriteString(cc, statusForbidden)
+		cc.Close()
+		return
+	}
 	if err != nil {
 		slog.Debug("http: read request error", "remote", cc.RemoteAddr(), "err", err)
 		cc.Close()

@@ -1,73 +1,61 @@
-# React + TypeScript + Vite
+# peercast-mi UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + TypeScript の管理画面。チャンネル、ストリームキー、ノード情報を操作する。Go サーバーとは別プロセスで起動する。
 
-Currently, two official plugins are available:
+## 起動
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+リポジトリ直下でバックエンドを起動する。
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```sh
+go build -o peercast-mi .
+./peercast-mi
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+別ターミナルで、必ず UI ディレクトリに移動してから実行する。
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```sh
+cd ~/src/go/peercast-mi/ui
+npm ci
+npm run dev
 ```
+
+ブラウザーで表示された URL (通常 http://localhost:5173/) を開く。依存が既に入っていれば npm ci は不要。
+
+API の既定値は http://127.0.0.1:7144/api/1。接続先を変える場合は ui/.env.local に VITE_PEERCAST_ENDPOINT を指定して Vite を再起動する。バックエンドの CORS は loopback origin と許可リスト方式であり、全 origin 許可ではない。別端末から利用するときは API の URL・CORS・通信保護を別途設定する。127.0.0.1 はブラウザーを開いた端末自身を指す。クリップボードは localhost または HTTPS などの secure context が必要。
+
+## 画面の動作
+
+- チャンネル名はキーボードでも選択できる。詳細には接続一覧と IPv6 対応のリレーツリーを表示する。
+- チャンネル・詳細・ノード情報は 30 秒ごとに更新。手動更新、読込中、最終更新時刻、失敗と再試行を表示する。
+- チャンネル切替時は詳細を作り直し、古い取得要求を中断する。遅れて届いた結果を別チャンネルの詳細に表示しない。
+- チャンネル情報の編集は保存直前に最新の track を取得して保持する。取得失敗なら書き込まない。ただしサーバーに条件付き更新 API がないため、取得から保存までの間の外部による track 更新との競合は解消できない。
+- リレーの「再接続」は上流再接続の要求。配信の「YP 再通知」は配信中の全チャンネルの再通知要求であり、YP 未設定時は何も行わない。
+- 配信開始時、キーの読み込み失敗・キー未発行を案内する。キーが確認できるまで送信しない。
+- 更新操作は処理中の二重送信を防止する。停止・切断・キー失効には対象を含む確認を出す。失効は実行中の配信を停止しない。
+- API は 15 秒でタイムアウトする。更新要求のタイムアウトは「未反映」の保証ではないため、状態を更新してから再操作する。自動再送はしない。
+- キーとキーを含む配信ソース URL は既定で伏せ字。表示・コピーできる。これは肩越しの閲覧対策であり、ブラウザーの開発者ツールから秘密を隠す仕組みではない。
+- 小さい画面ではフォームを縦並びにし、表だけを横スクロールできる。OS 設定に従うライト / ダークテーマに対応する。
+
+## X 認証付き視聴・配信サイト
+
+`/watch` が利用者向け画面。管理コンソールとは異なり `/site/api/*` を同一オリジンで利用する。
+`npm run build` 後、Go の `site.enabled` を有効にしてサイトサーバーから配信する。
+X アプリの登録、環境変数、HTTPS / RTMPS 終端、公開ポートの設定は [サイト導入手順](../docs/spec/site.md) を参照。
+`npm run dev` 単体では X 認証 API は起動しない。
+
+## 検証
+
+```sh
+npm run lint
+npm run build
+npx playwright install chromium
+# Linux で共有ライブラリが不足する場合 (管理者権限が必要):
+npx playwright install-deps chromium
+npm test
+```
+
+Playwright はテスト専用 Vite (127.0.0.1:4173、strictPort) を起動し、API を全て模擬応答に置き換える。実バックエンドを必要とせず、実際の配信やキーを変更しない。4173 が使用中なら失敗させ、別の既存サーバーは再利用しない。
+
+デスクトップ・390px のモバイル幅・ダークテーマで編集、応答競合、失敗時再試行、二重送信、キーボード操作、横はみ出しを検証する。スクリーンショットは test-results/ に保存する (Git 管理対象外)。実サーバーとの結合確認や実スマートフォンでの試験とは区別する。
+
+現在の仕様は [UI 仕様](../docs/spec/ui.md)、今回の検証結果は [UI 改善記録](../docs/reviews/2026-09-14-ui-improvements.md) を参照。

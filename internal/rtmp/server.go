@@ -123,11 +123,11 @@ func (h *handler) ch() *channel.Channel {
 func (h *handler) OnPublish(_ *gortmp.StreamContext, _ uint32, cmd *message.NetStreamPublish) error {
 	key := cmd.PublishingName
 	if !h.mgr.IsIssuedKey(key) {
-		slog.Warn("rtmp: rejected unknown stream key", "remote", h.remoteAddr, "key", key)
-		return fmt.Errorf("rtmp: stream key %q not issued", key)
+		slog.Warn("rtmp: rejected unknown stream key", "remote", h.remoteAddr)
+		return fmt.Errorf("rtmp: stream key not issued")
 	}
 	h.streamKey = key
-	slog.Info("rtmp: stream key accepted", "remote", h.remoteAddr, "key", key)
+	slog.Info("rtmp: stream key accepted", "remote", h.remoteAddr)
 	return nil
 }
 
@@ -200,7 +200,7 @@ func (h *handler) OnClose() {
 	if !ok {
 		return
 	}
-	slog.Info("rtmp: stopping channel on encoder disconnect", "key", h.streamKey, "channel_id", ch.ID)
+	slog.Info("rtmp: stopping channel on encoder disconnect", "channel_id", ch.ID)
 	h.mgr.Stop(ch.ID)
 }
 
@@ -247,7 +247,6 @@ func (h *handler) rebuildHeader() {
 
 	slog.Debug("rtmp: rebuildHeader",
 		"remote", h.remoteAddr,
-		"key", h.streamKey,
 		"headerSize", len(head),
 		"hasMeta", h.metaTag != nil,
 		"metaSize", len(h.metaTag),
@@ -276,7 +275,7 @@ func (h *handler) rebuildHeader() {
 	h.streamPos += uint32(len(head))
 	if h.headerAppliedTo != ch {
 		h.headerAppliedTo = ch
-		slog.Info("rtmp: stream started", "remote", h.remoteAddr, "key", h.streamKey)
+		slog.Info("rtmp: stream started", "remote", h.remoteAddr)
 	}
 }
 

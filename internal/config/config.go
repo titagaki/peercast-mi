@@ -37,6 +37,7 @@ func (y *YP) HostPort() (string, error) {
 }
 
 type Config struct {
+	Site         Site   `toml:"site"`
 	RTMPPort     int    `toml:"rtmp_port"`
 	PeercastPort int    `toml:"peercast_port"`
 	LogLevel     string `toml:"log_level"`
@@ -74,6 +75,17 @@ type Config struct {
 	// のオリジンは常に許可される。それ以外のオリジンからの要求は 403 で拒否する。
 	AllowedOrigins []string `toml:"allowed_origins"`
 	YPs            []YP     `toml:"yp"`
+}
+
+// Site is opt-in; secrets are read from the named process environment variables.
+type Site struct {
+	Enabled           bool   `toml:"enabled"`
+	Listen            string `toml:"listen"`
+	Origin            string `toml:"origin"`
+	UIDir             string `toml:"ui_dir"`
+	RTMPURL           string `toml:"rtmp_url"`
+	MaxViewers        int    `toml:"max_viewers"`
+	MaxViewersPerUser int    `toml:"max_viewers_per_user"`
 }
 
 func defaults() Config {

@@ -15,11 +15,13 @@
 
 ### 機能
 
-(なし)
+- [ ] X アプリ・公開 HTTPS / RTMPS を設定し、実ログイン、OBS → サイト視聴、他ノードへの公開 PCP 中継を結合検証する — [導入手順](spec/site.md)、[実装記録](reviews/2026-09-14-site-implementation.md)。秘密情報・公開 URL は利用環境で設定する
+- [ ] 視聴サイトを拡充する: 外部 YP 一覧、掲示板内蔵閲覧、お気に入り同期、HLS とスマホ実機検証、通知 — [比較表](reviews/2026-09-14-peca-live-viewing-auth-design.md)。初期実装は自ノード一覧・FLV プレイヤー・本人の配信管理
+- [ ] 公開運用に合わせて利用者別レート制限 / 帯域割当、アカウント停止と既存配信接続の切断を設計する — [ADR 0019](decisions/0019-authenticated-site.md)。現在は X ログイン成功者が利用可、視聴の同時接続数を制限
 
 ### 保守
 
-(なし)
+- [ ] UI の既存開発依存 (Vite など) の audit 指摘を精査・更新し、ビルドとブラウザーテストを再実行する — [UI 改善記録](reviews/2026-09-14-ui-improvements.md)。2026-09-14 時点で 9 件 (high 6 / moderate 2 / low 1)
 
 ## 進行中
 
@@ -31,6 +33,7 @@
 
 ## 完了
 
+- [x] 2026-09-14 X 認証付き視聴・配信サイトの初期実装、RTMP のキー入りログ除去、キー保存の並行更新・失敗時処理を修正 — [実装・検証記録](reviews/2026-09-14-site-implementation.md)、[ADR 0019](decisions/0019-authenticated-site.md)。公開 PCP は維持。実環境の認証・配信検証は未着手欄
 - [x] 2026-09-14 3 実装の比較と理由のない差異の修正 — [修正・検証結果](reviews/2026-09-14-comparison-corrections.md)、[ADR 0018](decisions/0018-comparison-corrections.md)。実機相互接続は未着手欄に分離
 
 - [x] 2026-09-14 `Channel.StartTime` を unexport (外部参照なし、`UptimeSeconds()` のみ)

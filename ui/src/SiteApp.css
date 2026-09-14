@@ -1,0 +1,49 @@
+.site-welcome {
+  max-width: 48rem;
+  margin: 3rem auto;
+  padding: 2.5rem;
+}
+.site-login {
+  display: inline-block;
+  padding: 0.8rem 1.5rem;
+  margin: 1rem 1rem 1rem 0;
+  border-radius: 0.6rem;
+  background: var(--accent, #087f5b);
+  color: white;
+  font-weight: 650;
+}
+.site-search {
+  display: block;
+  max-width: 32rem;
+  margin-bottom: 1.5rem;
+}
+.site-channels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+.site-channels article {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.site-player {
+  max-width: 64rem;
+  margin: 0 auto 1rem;
+}
+.site-player video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #111;
+  border-radius: 0.6rem;
+}
+.site-app fieldset {
+  margin-top: 1.5rem;
+  border: 1px solid var(--border, #aaa);
+  border-radius: 0.6rem;
+  padding: 1rem;
+}
+.site-app code {
+  overflow-wrap: anywhere;
+}

@@ -1,558 +1,497 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import {
-  broadcastChannel,
   bumpChannel,
   getChannelConnections,
   getChannelRelayTree,
   getChannels,
-  listStreamKeys,
-  setChannelInfo,
   stopChannel,
   stopChannelConnection,
-  type ChannelConnection,
   type ChannelEntry,
   type RelayTreeNode,
-  type StreamKeyEntry,
 } from "./api";
+import { BroadcastDialog, EditChannelDialog } from "./ChannelDialogs";
+import { Notice, Refresh, Secret, TableArea } from "./components";
+import { useAction, useResource } from "./hooks";
 
-function formatUptime(seconds: number): string {
-  if (!seconds) return "-";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0) return `${h}h${m}m${s}s`;
-  if (m > 0) return `${m}m${s}s`;
-  return `${s}s`;
+function uptime(seconds: number) {
+  return [
+    Math.floor(seconds / 3600),
+    Math.floor((seconds % 3600) / 60),
+    Math.floor(seconds % 60),
+  ]
+    .map((value) => value.toString().padStart(2, "0"))
+    .join(":");
 }
 
-function formatRate(bytesPerSec: number): string {
-  if (!bytesPerSec) return "-";
-  const kbps = (bytesPerSec * 8) / 1000;
-  if (kbps >= 1000) return `${(kbps / 1000).toFixed(2)} Mbps`;
-  return `${kbps.toFixed(1)} kbps`;
+function endpoint(address: string, port: number) {
+  return (
+    (address.includes(":") ? "[" + address + "]" : address || "未取得") +
+    ":" +
+    port
+  );
 }
 
-function RelayTreeNodeView({ node, depth }: { node: RelayTreeNode; depth: number }) {
-  const addr = node.address ? `${node.address}:${node.port}` : `*:${node.port}`;
+function TreeNode({
+  node,
+  depth = 0,
+}: {
+  node: RelayTreeNode;
+  depth?: number;
+}) {
   const flags = [
-    node.isTracker && "tracker",
-    node.isFirewalled && "firewalled",
-    node.isReceiving && "receiving",
-    node.isRelayFull && "relay-full",
-    node.isDirectFull && "direct-full",
-  ].filter(Boolean).join(" ");
-
+    node.isTracker && "配信元",
+    node.isFirewalled && "疎通未確認 / 閉鎖",
+    node.isReceiving && "受信中",
+    node.isRelayFull && "リレー満杯",
+    node.isDirectFull && "視聴満杯",
+  ]
+    .filter(Boolean)
+    .join("・");
   return (
     <>
       <tr>
-        <td style={{ paddingLeft: `${depth * 1.5 + 0.5}rem` }}>
-          {depth > 0 && <span className="tree-indent">{"└ "}</span>}
-          <span className="mono">{addr}</span>
+        <td style={{ paddingLeft: Math.min(depth, 8) * 1.25 + 1 + "rem" }}>
+          <span aria-hidden="true">{depth > 0 ? "└ " : ""}</span>
+          <span className="mono">{endpoint(node.address, node.port)}</span>
         </td>
         <td>{node.localDirects}</td>
         <td>{node.localRelays}</td>
-        <td>{node.versionString || "-"}</td>
-        <td>{flags || "-"}</td>
+        <td>{node.versionString || "—"}</td>
+        <td>{flags || "—"}</td>
       </tr>
-      {node.children.map((child, i) => (
-        <RelayTreeNodeView key={i} node={child} depth={depth + 1} />
+      {node.children.map((child, index) => (
+        <TreeNode
+          key={child.sessionId || index}
+          node={child}
+          depth={depth + 1}
+        />
       ))}
     </>
   );
 }
 
-function BroadcastDialog({
-  onCreated,
-}: {
-  onCreated: () => void;
-}) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [streamKeys, setStreamKeys] = useState<StreamKeyEntry[]>([]);
-  const [streamKey, setStreamKey] = useState("");
-  const [name, setName] = useState("");
-  const [genre, setGenre] = useState("");
-  const [desc, setDesc] = useState("");
-  const [comment, setComment] = useState("");
-  const [url, setUrl] = useState("");
-  const [bitrateInput, setBitrateInput] = useState("自動");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const openDialog = () => {
-    void listStreamKeys().then(setStreamKeys);
-    setError(null);
-    dialogRef.current?.showModal();
-  };
-
-  const closeDialog = () => {
-    dialogRef.current?.close();
-  };
-
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSubmitting(true);
-    try {
-      const bitrateNum = parseInt(bitrateInput, 10);
-      await broadcastChannel({
-        streamKey,
-        info: {
-          name,
-          genre: genre || undefined,
-          url: url || undefined,
-          desc: desc || undefined,
-          comment: comment || undefined,
-          bitrate: Number.isFinite(bitrateNum) && bitrateNum > 0 ? bitrateNum : undefined,
-        },
-      });
-      closeDialog();
-      setName("");
-      setGenre("");
-      setDesc("");
-      setComment("");
-      setUrl("");
-      setBitrateInput("自動");
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <>
-      <button onClick={openDialog}>Broadcast</button>
-      <dialog ref={dialogRef} className="broadcast-dialog">
-        <form onSubmit={onSubmit}>
-          <h3>Start Broadcast</h3>
-          <div className="broadcast-form-grid">
-            <label>Stream Key</label>
-            <select value={streamKey} onChange={(e) => setStreamKey(e.target.value)} required>
-              <option value="">-- select --</option>
-              {streamKeys.map((sk) => (
-                <option key={sk.accountName} value={sk.streamKey}>
-                  {sk.accountName}
-                </option>
-              ))}
-            </select>
-
-            <label>Name</label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
-
-            <label>Genre</label>
-            <input type="text" value={genre} onChange={(e) => setGenre(e.target.value)} />
-
-            <label>Description</label>
-            <input type="text" value={desc} onChange={(e) => setDesc(e.target.value)} />
-
-            <label>Comment</label>
-            <input type="text" value={comment} onChange={(e) => setComment(e.target.value)} />
-
-            <label>URL</label>
-            <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} />
-
-            <label>Bitrate (kbps)</label>
-            <div>
-              <input
-                type="text"
-                list="bitrate-presets"
-                value={bitrateInput}
-                onChange={(e) => setBitrateInput(e.target.value)}
-              />
-              <datalist id="bitrate-presets">
-                <option value="自動" />
-                <option value="500" />
-                <option value="1000" />
-                <option value="2000" />
-                <option value="3000" />
-                <option value="5000" />
-              </datalist>
-            </div>
-          </div>
-
-          {error && <div className="error">{error}</div>}
-
-          <div className="broadcast-form-actions">
-            <button type="submit" disabled={submitting}>
-              {submitting ? "Starting..." : "Start Broadcast"}
-            </button>
-            <button type="button" onClick={closeDialog}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      </dialog>
-    </>
-  );
-}
-
-function EditChannelDialog({
+// Remount by channelId: details and actions never belong to another selection.
+function ChannelDetail({
   entry,
   onUpdated,
+  onClose,
 }: {
   entry: ChannelEntry;
   onUpdated: () => void;
+  onClose: () => void;
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const [name, setName] = useState("");
-  const [genre, setGenre] = useState("");
-  const [desc, setDesc] = useState("");
-  const [comment, setComment] = useState("");
-  const [url, setUrl] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const openDialog = () => {
-    setName(entry.info.name);
-    setGenre(entry.info.genre);
-    setDesc(entry.info.desc);
-    setComment(entry.info.comment);
-    setUrl(entry.info.url);
-    setError(null);
-    dialogRef.current?.showModal();
-  };
-
-  const closeDialog = () => {
-    dialogRef.current?.close();
-  };
-
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSubmitting(true);
-    try {
-      await setChannelInfo(entry.channelId, {
-        info: { name, genre, url, desc, comment },
-      });
-      closeDialog();
-      onUpdated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
+  const loadConnections = useCallback(
+    (signal: AbortSignal) => getChannelConnections(entry.channelId, signal),
+    [entry.channelId],
+  );
+  const loadTree = useCallback(
+    (signal: AbortSignal) => getChannelRelayTree(entry.channelId, signal),
+    [entry.channelId],
+  );
+  const connections = useResource(loadConnections, 30000);
+  const tree = useResource(loadTree, 30000);
+  const action = useAction();
+  const [editing, setEditing] = useState(false);
   return (
-    <>
-      <button onClick={openDialog}>Edit</button>
-      <dialog ref={dialogRef} className="broadcast-dialog">
-        <form onSubmit={onSubmit}>
-          <h3>Edit Channel Info</h3>
-          <div className="broadcast-form-grid">
-            <label>Name</label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
-
-            <label>Genre</label>
-            <input type="text" value={genre} onChange={(e) => setGenre(e.target.value)} />
-
-            <label>Description</label>
-            <input type="text" value={desc} onChange={(e) => setDesc(e.target.value)} />
-
-            <label>Comment</label>
-            <input type="text" value={comment} onChange={(e) => setComment(e.target.value)} />
-
-            <label>URL</label>
-            <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} />
-          </div>
-
-          {error && <div className="error">{error}</div>}
-
-          <div className="broadcast-form-actions">
-            <button type="submit" disabled={submitting}>
-              {submitting ? "Saving..." : "Save"}
-            </button>
-            <button type="button" onClick={closeDialog}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      </dialog>
-    </>
+    <section className="detail-panel" aria-label="選択チャンネルの詳細">
+      <header className="section-heading">
+        <div>
+          <span className="eyebrow">CHANNEL DETAIL</span>
+          <h3>{entry.info.name || "名前なし"}</h3>
+        </div>
+        <div className="actions">
+          {entry.status.isBroadcasting && (
+            <button onClick={() => setEditing(true)}>情報を編集</button>
+          )}
+          <button onClick={onClose}>詳細を閉じる</button>
+        </div>
+      </header>
+      <dl className="details">
+        <dt>チャンネル ID</dt>
+        <dd className="mono">{entry.channelId}</dd>
+        <dt>ソース</dt>
+        <dd>
+          {entry.status.isBroadcasting ? (
+            <Secret value={entry.status.source} />
+          ) : (
+            <code>{entry.status.source || "—"}</code>
+          )}
+        </dd>
+        <dt>ジャンル</dt>
+        <dd>{entry.info.genre || "—"}</dd>
+        <dt>説明</dt>
+        <dd>{entry.info.desc || "—"}</dd>
+        <dt>コメント</dt>
+        <dd>{entry.info.comment || "—"}</dd>
+        <dt>URL</dt>
+        <dd>{entry.info.url || "—"}</dd>
+        <dt>トラック</dt>
+        <dd>
+          {[entry.track.creator, entry.track.title]
+            .filter(Boolean)
+            .join(" — ") || "—"}
+        </dd>
+        <dt>空き枠</dt>
+        <dd>
+          リレー: {entry.status.isRelayFull ? "満杯" : "空きあり"} / 視聴:{" "}
+          {entry.status.isDirectFull ? "満杯" : "空きあり"}
+        </dd>
+      </dl>
+      <div className="section-heading">
+        <h4>接続一覧</h4>
+        <Refresh
+          loading={connections.loading}
+          updated={connections.updated}
+          onClick={connections.reload}
+        />
+      </div>
+      <Notice error={connections.error} />
+      <Notice error={action.error} message={action.message} />
+      <TableArea label="接続一覧">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>種類</th>
+              <th>プロトコル</th>
+              <th>状態</th>
+              <th>接続先</th>
+              <th>送信</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!connections.data?.length && (
+              <tr>
+                <td colSpan={7} className="empty">
+                  {connections.loading
+                    ? "接続を読み込み中…"
+                    : connections.error
+                      ? "接続を取得できませんでした。"
+                      : "接続はありません。"}
+                </td>
+              </tr>
+            )}
+            {connections.data?.map((connection) => (
+              <tr key={connection.type + "-" + connection.connectionId}>
+                <td>
+                  {connection.connectionId < 0 ? "—" : connection.connectionId}
+                </td>
+                <td>
+                  {connection.type === "relay"
+                    ? "リレー"
+                    : connection.type === "direct"
+                      ? "視聴"
+                      : "ソース"}
+                </td>
+                <td>{connection.protocolName}</td>
+                <td>{connection.status}</td>
+                <td className="mono">{connection.remoteEndPoint || "—"}</td>
+                <td className="nowrap">
+                  {((connection.sendRate * 8) / 1000).toFixed(1)} kbps
+                </td>
+                <td>
+                  {connection.type === "relay" && (
+                    <button
+                      className="danger"
+                      disabled={
+                        action.busy ||
+                        connections.loading ||
+                        !!connections.error
+                      }
+                      onClick={() => {
+                        if (
+                          !confirm(
+                            "「" +
+                              entry.info.name +
+                              "」の接続 " +
+                              (connection.remoteEndPoint ||
+                                connection.connectionId) +
+                              " を切断しますか？",
+                          )
+                        )
+                          return;
+                        void action.run(async () => {
+                          const stopped = await stopChannelConnection(
+                            entry.channelId,
+                            connection.connectionId,
+                          );
+                          connections.reload();
+                          tree.reload();
+                          onUpdated();
+                          if (!stopped)
+                            throw new Error(
+                              "対象の接続は既に終了しています。一覧を更新しました。",
+                            );
+                        }, "接続を切断しました。");
+                      }}
+                    >
+                      切断
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableArea>
+      <div className="section-heading">
+        <h4>リレーツリー</h4>
+        <Refresh
+          loading={tree.loading}
+          updated={tree.updated}
+          onClick={tree.reload}
+        />
+      </div>
+      <Notice error={tree.error} />
+      <TableArea label="リレーツリー">
+        <table>
+          <thead>
+            <tr>
+              <th>アドレス</th>
+              <th>視聴数</th>
+              <th>リレー数</th>
+              <th>エージェント</th>
+              <th>状態</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!tree.data?.length && (
+              <tr>
+                <td colSpan={5} className="empty">
+                  {tree.loading
+                    ? "ツリーを読み込み中…"
+                    : tree.error
+                      ? "ツリーを取得できませんでした。"
+                      : "ツリー情報はありません。"}
+                </td>
+              </tr>
+            )}
+            {tree.data?.map((node, index) => (
+              <TreeNode key={node.sessionId || index} node={node} />
+            ))}
+          </tbody>
+        </table>
+      </TableArea>
+      {editing && (
+        <EditChannelDialog
+          entry={entry}
+          onClose={() => setEditing(false)}
+          onUpdated={onUpdated}
+        />
+      )}
+    </section>
   );
 }
 
 export function ChannelsPage() {
-  const [entries, setEntries] = useState<ChannelEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const channels = useResource(getChannels, 30000);
+  const entries = channels.data ?? [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [connections, setConnections] = useState<ChannelConnection[]>([]);
-  const [connError, setConnError] = useState<string | null>(null);
-  const [relayTree, setRelayTree] = useState<RelayTreeNode[]>([]);
-  const [relayTreeError, setRelayTreeError] = useState<string | null>(null);
-
-  const reload = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setEntries(await getChannels());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void reload();
-    const timer = setInterval(() => void reload(), 30000);
-    return () => clearInterval(timer);
-  }, [reload]);
-
-  const selected = entries.find((e) => e.channelId === selectedId) ?? null;
-
-  const reloadConnections = useCallback(async (channelId: string) => {
-    setConnError(null);
-    try {
-      setConnections(await getChannelConnections(channelId));
-    } catch (e) {
-      setConnError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  const reloadRelayTree = useCallback(async (channelId: string) => {
-    setRelayTreeError(null);
-    try {
-      setRelayTree(await getChannelRelayTree(channelId));
-    } catch (e) {
-      setRelayTreeError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!selectedId) {
-      setConnections([]);
-      setConnError(null);
-      setRelayTree([]);
-      setRelayTreeError(null);
-      return;
-    }
-    void reloadConnections(selectedId);
-    void reloadRelayTree(selectedId);
-    const timer = setInterval(() => {
-      void reloadConnections(selectedId);
-      void reloadRelayTree(selectedId);
-    }, 30000);
-    return () => clearInterval(timer);
-  }, [selectedId, reloadConnections, reloadRelayTree]);
-
-  const onStopConnection = async (connectionId: number) => {
-    if (!selectedId) return;
-    if (!confirm("Disconnect this connection?")) return;
-    try {
-      await stopChannelConnection(selectedId, connectionId);
-      await reloadConnections(selectedId);
-    } catch (e) {
-      setConnError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const onStop = async (channelId: string) => {
-    if (!confirm("Stop this channel?")) return;
-    try {
-      await stopChannel(channelId);
-      await reload();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const onBump = async (channelId: string) => {
-    try {
-      await bumpChannel(channelId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
+  const [broadcasting, setBroadcasting] = useState(false);
+  const action = useAction();
+  const selected = entries.find((entry) => entry.channelId === selectedId);
+  const disabled = action.busy || channels.loading || !!channels.error;
   return (
     <section>
       <header className="page-header">
-        <h2>Channels</h2>
-        <BroadcastDialog onCreated={reload} />
-      </header>
-
-      {error && <div className="error">{error}</div>}
-
-      {(() => {
-        const broadcasting = entries.filter((c) => c.status.isBroadcasting);
-        const relay = entries.filter((c) => !c.status.isBroadcasting);
-
-        const renderRow = (c: ChannelEntry) => (
-          <tr
-            key={c.channelId}
-            onClick={() => setSelectedId(c.channelId)}
-            className={c.channelId === selectedId ? "selected" : ""}
-          >
-            <td>
-              {c.info.name || "(unnamed)"}
-              <span className="badge">{c.status.isBroadcasting ? "Broadcasting" : "Relay"}</span>
-            </td>
-            <td>{c.status.status}</td>
-            <td>{c.info.contentType}</td>
-            <td>{c.info.bitrate} kbps</td>
-            <td>
-              {c.status.localDirects} / {c.status.totalDirects}
-            </td>
-            <td>
-              {c.status.localRelays} / {c.status.totalRelays}
-            </td>
-            <td>{formatUptime(c.status.uptime)}</td>
-            <td onClick={(e) => e.stopPropagation()}>
-              <button onClick={() => onBump(c.channelId)}>Bump</button>{" "}
-              <button onClick={() => onStop(c.channelId)}>Stop</button>
-            </td>
-          </tr>
-        );
-
-        return (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Type</th>
-                <th>Bitrate</th>
-                <th>Listeners</th>
-                <th>Relays</th>
-                <th>Uptime</th>
-                <th></th>
-              </tr>
-            </thead>
-            {entries.length === 0 && !loading && (
-              <tbody>
-                <tr>
-                  <td colSpan={8} className="empty">
-                    No channels.
-                  </td>
-                </tr>
-              </tbody>
-            )}
-            {broadcasting.length > 0 && (
-              <tbody>
-                <tr className="group-header"><td colSpan={8}>Broadcasting</td></tr>
-                {broadcasting.map(renderRow)}
-              </tbody>
-            )}
-            {relay.length > 0 && (
-              <tbody>
-                <tr className="group-header"><td colSpan={8}>Relay</td></tr>
-                {relay.map(renderRow)}
-              </tbody>
-            )}
-          </table>
-        );
-      })()}
-
-      {selected && (
-        <div className="detail-panel">
-          <header className="detail-panel-header">
-            <h3>Detail</h3>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              {selected.status.isBroadcasting && <EditChannelDialog entry={selected} onUpdated={reload} />}
-              <button onClick={() => {
-                void reload();
-                void reloadConnections(selected.channelId);
-                void reloadRelayTree(selected.channelId);
-              }}>Reload</button>
-            </div>
-          </header>
-          <dl>
-            <dt>Channel ID</dt>
-            <dd className="mono">{selected.channelId}</dd>
-            <dt>Source</dt>
-            <dd className="mono">{selected.status.source}</dd>
-            <dt>Genre</dt>
-            <dd>{selected.info.genre || "-"}</dd>
-            <dt>Description</dt>
-            <dd>{selected.info.desc || "-"}</dd>
-            <dt>Comment</dt>
-            <dd>{selected.info.comment || "-"}</dd>
-            <dt>URL</dt>
-            <dd>{selected.info.url || "-"}</dd>
-            <dt>Track</dt>
-            <dd>
-              {selected.track.creator || selected.track.title
-                ? `${selected.track.creator} - ${selected.track.title}`
-                : "-"}
-            </dd>
-            <dt>Flags</dt>
-            <dd>
-              {selected.status.isReceiving ? "receiving " : ""}
-              {selected.status.isRelayFull ? "relay-full " : ""}
-              {selected.status.isDirectFull ? "direct-full " : ""}
-            </dd>
-          </dl>
-
-          <h4>Connections</h4>
-          {connError && <div className="error">{connError}</div>}
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Type</th>
-                <th>Protocol</th>
-                <th>Status</th>
-                <th>Remote</th>
-                <th>Send</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {connections.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="empty">
-                    No connections.
-                  </td>
-                </tr>
-              )}
-              {connections.map((c) => (
-                <tr key={`${c.type}-${c.connectionId}`}>
-                  <td>{c.connectionId < 0 ? "-" : c.connectionId}</td>
-                  <td>{c.type}</td>
-                  <td>{c.protocolName}</td>
-                  <td>{c.status}</td>
-                  <td className="mono">{c.remoteEndPoint ?? "-"}</td>
-                  <td>{formatRate(c.sendRate)}</td>
-                  <td>
-                    {c.type === "relay" && (
-                      <button onClick={() => onStopConnection(c.connectionId)}>
-                        Disconnect
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <h4>Relay Tree</h4>
-          {relayTreeError && <div className="error">{relayTreeError}</div>}
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Address</th>
-                <th>Listeners</th>
-                <th>Relays</th>
-                <th>Agent</th>
-                <th>Flags</th>
-              </tr>
-            </thead>
-            <tbody>
-              {relayTree.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="empty">
-                    No relay tree.
-                  </td>
-                </tr>
-              )}
-              {relayTree.map((node, i) => (
-                <RelayTreeNodeView key={i} node={node} depth={0} />
-              ))}
-            </tbody>
-          </table>
+        <div>
+          <span className="eyebrow">LIVE NETWORK</span>
+          <h2>チャンネル</h2>
+          <p className="muted">
+            配信とリレーを管理します。30 秒ごとに自動更新。
+          </p>
         </div>
+        <button className="primary" onClick={() => setBroadcasting(true)}>
+          ＋ 配信を開始
+        </button>
+      </header>
+      <div className="summary-grid">
+        <div>
+          <span>配信チャンネル</span>
+          <strong>
+            {channels.data
+              ? entries.filter((entry) => entry.status.isBroadcasting).length
+              : "—"}
+          </strong>
+        </div>
+        <div>
+          <span>リレーチャンネル</span>
+          <strong>
+            {channels.data
+              ? entries.filter((entry) => !entry.status.isBroadcasting).length
+              : "—"}
+          </strong>
+        </div>
+        <div>
+          <span>ローカル視聴接続</span>
+          <strong>
+            {channels.data
+              ? entries.reduce(
+                  (sum, entry) => sum + entry.status.localDirects,
+                  0,
+                )
+              : "—"}
+          </strong>
+        </div>
+      </div>
+      <div className="section-heading">
+        <p className="muted">チャンネル名を選択すると詳細を表示します。</p>
+        <Refresh
+          loading={channels.loading}
+          updated={channels.updated}
+          onClick={channels.reload}
+        />
+      </div>
+      <Notice error={channels.error} />
+      <Notice error={action.error} message={action.message} />
+      <TableArea label="チャンネル一覧">
+        <table className="channel-table">
+          <thead>
+            <tr>
+              <th>チャンネル</th>
+              <th>状態</th>
+              <th>形式 / ビットレート</th>
+              <th>
+                視聴
+                <br />
+                <small>ローカル / 全体</small>
+              </th>
+              <th>
+                リレー
+                <br />
+                <small>ローカル / 全体</small>
+              </th>
+              <th>稼働時間</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {!entries.length && (
+              <tr>
+                <td colSpan={7} className="empty">
+                  {channels.loading
+                    ? "チャンネルを読み込み中…"
+                    : channels.error
+                      ? "チャンネルを取得できませんでした。「更新」で再試行できます。"
+                      : "チャンネルはありません。配信を開始すると、ここに表示されます。"}
+                </td>
+              </tr>
+            )}
+            {[...entries]
+              .sort(
+                (a, b) =>
+                  Number(b.status.isBroadcasting) -
+                  Number(a.status.isBroadcasting),
+              )
+              .map((entry) => (
+                <tr
+                  key={entry.channelId}
+                  className={selectedId === entry.channelId ? "selected" : ""}
+                >
+                  <td>
+                    <button
+                      className="channel-name"
+                      aria-pressed={selectedId === entry.channelId}
+                      onClick={() => setSelectedId(entry.channelId)}
+                    >
+                      {entry.info.name || "名前なし"}
+                    </button>
+                    <span className="kind">
+                      {entry.status.isBroadcasting ? "配信" : "リレー"}
+                    </span>
+                  </td>
+                  <td>
+                    <span
+                      className={
+                        "status-pill " +
+                        (entry.status.isReceiving ? "live" : "idle")
+                      }
+                    >
+                      {entry.status.isReceiving ? "受信中" : "待機中"}
+                    </span>
+                  </td>
+                  <td>
+                    {entry.info.contentType || "未取得"}
+                    <span className="kind">
+                      {entry.info.bitrate
+                        ? entry.info.bitrate + " kbps"
+                        : "自動 / 未取得"}
+                    </span>
+                  </td>
+                  <td>
+                    {entry.status.localDirects} / {entry.status.totalDirects}
+                  </td>
+                  <td>
+                    {entry.status.localRelays} / {entry.status.totalRelays}
+                  </td>
+                  <td className="mono nowrap">{uptime(entry.status.uptime)}</td>
+                  <td>
+                    <div className="actions">
+                      <button
+                        disabled={disabled}
+                        title={
+                          entry.status.isBroadcasting
+                            ? "配信中の全チャンネルを YP に再通知"
+                            : "上流への再接続を要求。下流接続は維持"
+                        }
+                        onClick={() =>
+                          void action.run(
+                            async () => {
+                              await bumpChannel(entry.channelId);
+                              channels.reload();
+                            },
+                            entry.status.isBroadcasting
+                              ? "YP への再通知を要求しました（YP 未設定時は何も行いません）。"
+                              : "再接続を要求しました。成立状況は受信状態で確認してください。",
+                          )
+                        }
+                      >
+                        {entry.status.isBroadcasting ? "YP 再通知" : "再接続"}
+                      </button>
+                      <button
+                        className="danger"
+                        disabled={disabled}
+                        onClick={() => {
+                          if (
+                            !confirm(
+                              "「" +
+                                (entry.info.name || entry.channelId) +
+                                "」を停止しますか？ 視聴・リレー接続も終了します。",
+                            )
+                          )
+                            return;
+                          void action.run(async () => {
+                            await stopChannel(entry.channelId);
+                            setSelectedId((current) =>
+                              current === entry.channelId ? null : current,
+                            );
+                            channels.reload();
+                          }, "チャンネルを停止しました。");
+                        }}
+                      >
+                        停止
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </TableArea>
+      {selected && (
+        <ChannelDetail
+          key={selected.channelId}
+          entry={selected}
+          onUpdated={channels.reload}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
+      {broadcasting && (
+        <BroadcastDialog
+          onClose={() => setBroadcasting(false)}
+          onCreated={channels.reload}
+        />
       )}
     </section>
   );

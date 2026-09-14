@@ -62,16 +62,15 @@ func (s *StreamKeyStore) LoadCache() error {
 	return nil
 }
 
+// saveCache is called with mu held, serializing the snapshot and rename.
 func (s *StreamKeyStore) saveCache() error {
 	if s.cachePath == "" {
 		return nil
 	}
-	s.mu.RLock()
 	accounts := make(map[string]string, len(s.accounts))
 	for name, key := range s.accounts {
 		accounts[name] = key
 	}
-	s.mu.RUnlock()
 
 	data, err := json.Marshal(struct {
 		Accounts map[string]string `json:"accounts"`
@@ -92,27 +91,40 @@ func (s *StreamKeyStore) saveCache() error {
 // The mapping is persisted to the cache file.
 func (s *StreamKeyStore) IssueStreamKey(accountName, streamKey string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if owner, ok := s.streamKeys[streamKey]; ok && owner != accountName {
+		return fmt.Errorf("stream key already assigned")
+	}
+	oldKey, existed := s.accounts[accountName]
 	if oldKey, ok := s.accounts[accountName]; ok {
 		delete(s.streamKeys, oldKey)
 	}
 	s.accounts[accountName] = streamKey
 	s.streamKeys[streamKey] = accountName
-	s.mu.Unlock()
-	return s.saveCache()
+	if err := s.saveCache(); err != nil {
+		delete(s.streamKeys, streamKey)
+		if existed {
+			s.accounts[accountName] = oldKey
+			s.streamKeys[oldKey] = accountName
+		} else {
+			delete(s.accounts, accountName)
+		}
+		return err
+	}
+	return nil
 }
 
 // RevokeStreamKey removes the stream key for the given account.
 // Returns false if the account was not found.
 func (s *StreamKeyStore) RevokeStreamKey(accountName string) bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	key, ok := s.accounts[accountName]
 	if !ok {
-		s.mu.Unlock()
 		return false
 	}
 	delete(s.accounts, accountName)
 	delete(s.streamKeys, key)
-	s.mu.Unlock()
 	if err := s.saveCache(); err != nil {
 		slog.Warn("stream key cache: save failed on revoke", "err", err)
 	}

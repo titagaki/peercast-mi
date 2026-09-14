@@ -1,8 +1,7 @@
 // Minimal JSON-RPC 2.0 client for peercast-mi.
 //
-// The backend listens on port 7144 bound to 127.0.0.1. During `vite dev` the
-// UI itself is served from a different port (5173 by default), so requests go
-// cross-origin; peercast-mi already sets Access-Control-Allow-Origin: *.
+// Vite uses a different origin. The server allows loopback origins by default;
+// other UI origins must be explicitly allowed in the backend configuration.
 
 const ENDPOINT =
   (import.meta.env.VITE_PEERCAST_ENDPOINT as string | undefined) ??
@@ -21,17 +20,28 @@ let nextId = 1;
 export async function rpc<T = unknown>(
   method: string,
   params: unknown[] = [],
+  signal?: AbortSignal,
 ): Promise<T> {
   const id = nextId++;
+  const timeout = AbortSignal.timeout(15000);
   const res = await fetch(ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} ${res.statusText}`);
   }
   const body = await res.json();
+  if (
+    !body ||
+    body.jsonrpc !== "2.0" ||
+    body.id !== id ||
+    (!Object.hasOwn(body, "result") && !body.error)
+  ) {
+    throw new Error("サーバーから不正な応答を受信しました。");
+  }
   if (body.error) {
     throw new RpcError(body.error.code, body.error.message);
   }
@@ -87,7 +97,8 @@ export type ChannelEntry = {
   track: TrackInfo;
 };
 
-export const listStreamKeys = () => rpc<StreamKeyEntry[]>("listStreamKeys");
+export const listStreamKeys = (signal?: AbortSignal) =>
+  rpc<StreamKeyEntry[]>("listStreamKeys", [], signal);
 export const issueStreamKey = (accountName: string, streamKey: string) =>
   rpc<null>("issueStreamKey", [accountName, streamKey]);
 export const revokeStreamKey = (accountName: string) =>
@@ -157,20 +168,30 @@ export type YellowPage = {
   channelCount: number;
 };
 
-export const getVersionInfo = () => rpc<VersionInfo>("getVersionInfo");
-export const getSettings = () => rpc<Settings>("getSettings");
-export const getYellowPages = () => rpc<YellowPage[]>("getYellowPages");
-export const getChannels = () => rpc<ChannelEntry[]>("getChannels");
-export const getChannelRelayTree = (channelId: string) =>
-  rpc<RelayTreeNode[]>("getChannelRelayTree", [channelId]);
+export const getVersionInfo = (signal?: AbortSignal) =>
+  rpc<VersionInfo>("getVersionInfo", [], signal);
+export const getSettings = (signal?: AbortSignal) =>
+  rpc<Settings>("getSettings", [], signal);
+export const getYellowPages = (signal?: AbortSignal) =>
+  rpc<YellowPage[]>("getYellowPages", [], signal);
+export const getChannels = (signal?: AbortSignal) =>
+  rpc<ChannelEntry[]>("getChannels", [], signal);
+export const getChannelInfo = (channelId: string) =>
+  rpc<{ info: ChannelInfo; track: TrackInfo }>("getChannelInfo", [channelId]);
+export const getChannelRelayTree = (channelId: string, signal?: AbortSignal) =>
+  rpc<RelayTreeNode[]>("getChannelRelayTree", [channelId], signal);
 export const stopChannel = (channelId: string) =>
   rpc<null>("stopChannel", [channelId]);
 export const bumpChannel = (channelId: string) =>
   rpc<null>("bumpChannel", [channelId]);
-export const getChannelConnections = (channelId: string) =>
-  rpc<ChannelConnection[]>("getChannelConnections", [channelId]);
-export const stopChannelConnection = (channelId: string, connectionId: number) =>
-  rpc<boolean>("stopChannelConnection", [channelId, connectionId]);
+export const getChannelConnections = (
+  channelId: string,
+  signal?: AbortSignal,
+) => rpc<ChannelConnection[]>("getChannelConnections", [channelId], signal);
+export const stopChannelConnection = (
+  channelId: string,
+  connectionId: number,
+) => rpc<boolean>("stopChannelConnection", [channelId, connectionId]);
 
 export type SetChannelInfoParam = {
   info: {
@@ -189,5 +210,12 @@ export type SetChannelInfoParam = {
   };
 };
 
-export const setChannelInfo = (channelId: string, param: SetChannelInfoParam) =>
-  rpc<null>("setChannelInfo", [channelId, param.info, param.track ?? {}]);
+export const setChannelInfo = async (
+  channelId: string,
+  param: SetChannelInfoParam,
+) => {
+  // The backend replaces track, even when {} is passed. Preserve a fresh
+  // snapshot when editing only channel info; never silently erase the track.
+  const track = param.track ?? (await getChannelInfo(channelId)).track;
+  return rpc<null>("setChannelInfo", [channelId, param.info, track]);
+};

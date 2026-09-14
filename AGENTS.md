@@ -2,7 +2,7 @@
 
 Go 製の PeerCast ノード。ブロードキャストノード (RTMP → PCP 配信) と、上流 PCP ノードから受信して中継するリレーノードに対応する。
 
-Web UI (`ui/` は別管理) と firewalled ノード向けの push (GIV) 接続は対象外。
+Web UI は `ui/`、オプションの X 認証付き視聴・配信サイトは `internal/site`。firewalled ノード向けの push (GIV) 接続は対象外。
 
 ## 主な構成
 
@@ -12,6 +12,7 @@ Web UI (`ui/` は別管理) と firewalled ノード向けの push (GIV) 接続�
 - `internal/servent` — ポート 7144 の受け付け (PCP リレー送信、HTTP 視聴、/pls/、JSON-RPC の転送)
 - `internal/yp` — YP への COUT 接続とチャンネル情報の送信
 - `internal/jsonrpc` — JSON-RPC API
+- `internal/site` — X 認証、利用者専用 API、認証付き HTTP 視聴（公開 PCP は維持）
 - `internal/pcputil` — PCP Host アトム構築の共通処理
 - `internal/config`, `internal/id`, `internal/version` — 設定、ID 生成、バージョン定数
 

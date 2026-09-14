@@ -24,6 +24,8 @@ PeerCastStation との差異を埋めるために入れた動作の根拠 (ratio
 
 `OnPublish(cmd *message.NetStreamPublish)` コールバックで認証を行う。
 
+RTMP ハンドラーのログおよび未発行キーのエラー文にキーの生値は含めない。
+
 ```
 cmd.PublishingName = "sk_a1b2c3..."  ← OBS の「ストリームキー」欄
 ```
@@ -572,6 +574,8 @@ bcst
 ### 視聴要求 (`/pls/`, `/stream/`)
 
 両ハンドラーは `parseViewerRequest` で HTTP リクエストを 1 回だけ読み、同じ規則で解析する (HTTPOutputStream はリクエストを読まない)。
+
+`site.enabled = true` の場合は両方に内部 Bearer token が必要で、欠如 / 不一致はチャンネル解決前に 403。公開 PCP 中継は制限しない。サイトの外部認証・プロキシについては [site.md](site.md) を参照。以下のオンデマンドリレーの規則は、この入口検査を通過した要求に適用される。
 
 ```
 パス:    <prefix><32 桁 hex の channelId>[.<拡張子>]

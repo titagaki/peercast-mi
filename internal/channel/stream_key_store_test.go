@@ -1,10 +1,44 @@
 package channel
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
+
+func TestStreamKeyStore_DuplicateAndConcurrentPersistence(t *testing.T) {
+	s, path := newTestStore(t)
+	if err := s.IssueStreamKey("alice", "shared"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IssueStreamKey("bob", "shared"); err == nil {
+		t.Fatal("shared ownership allowed")
+	}
+	if s.RevokeStreamKey("bob") || !s.IsIssuedKey("shared") {
+		t.Fatal("duplicate attempt damaged owner")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if err := s.IssueStreamKey(fmt.Sprint(i), fmt.Sprint("key-", i)); err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	restored := NewStreamKeyStore()
+	restored.SetCachePath(path)
+	if err := restored.LoadCache(); err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.List()) != 21 {
+		t.Fatal("concurrent write lost keys")
+	}
+}
 
 func newTestStore(t *testing.T) (*StreamKeyStore, string) {
 	t.Helper()

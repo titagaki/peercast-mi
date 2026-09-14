@@ -11,6 +11,7 @@ Go 製 PeerCast ノードの実装仕様。ブロードキャストノード（R
 ### 対象
 
 - RTMP サーバー (エンコーダーからの push 受信)
+- オプションの X 認証付き視聴・配信サイト ([site.md](site.md))。管理 UI の仕様は [ui.md](ui.md)
 - PCP ブロードキャストノード (non-root、`IsBroadcasting = true`)
   - YP への COUT 接続・チャンネル登録
   - 下流 PeerCast ノードへの PCP リレー送信
@@ -21,7 +22,6 @@ Go 製 PeerCast ノードの実装仕様。ブロードキャストノード（R
 
 ### 対象外
 
-- Web UI
 - push 接続 (firewalled ノード向け)
 
 ---
@@ -107,6 +107,8 @@ PCP ハンドシェイクの `helo.sid` および `bcst.from`、`oleh.sid` と�
 ### 3.3 ストリームキー (StreamKey)
 
 RTMP エンコーダーの認証に使用するトークン。値は `issueStreamKey` の呼び出し側 (pcgw-0yp 等) が生成して渡す任意の文字列で、peercast-mi 側で形式は検証しない (慣例として `sk_` + ランダム hex)。
+
+サイトからの発行時はサーバーが乱数で生成する。他アカウントと同じキーは登録できない。発行・失効の保存は直列化し、発行保存に失敗した場合は以前のマッピングを維持する。サイト有効時にキーキャッシュを読み込めなければ起動を失敗させる。
 
 `issueStreamKey` で発行すると `stream_keys.json` (config.toml と同じディレクトリ) に永続化され、`revokeStreamKey` で失効させるまでプロセス再起動をまたいで有効。チャンネルのライフサイクルに依存しない。
 

@@ -31,4 +31,5 @@
 | [0016](0016-relay-request-source-policy.md) | オンデマンドリレーの開始要求は送信元で制限し、接続先では制限しない | 採用 |
 | [0017](0017-http-wait-for-info.md) | HTTP 視聴は ChannelInfo を待ってから 200 を返す | 採用 |
 | [0018](0018-comparison-corrections.md) | 比較で判明した通知・状態・再接続の差異を修正する | 採用 |
+| [0019](0019-authenticated-site.md) | 公開 PCP を維持し、サイト利用だけ X 認証で制御する | 採用 |
 | [peercaststation-compat](peercaststation-compat.md) | PeerCastStation との挙動合わせ (複数項目) | 採用 |
