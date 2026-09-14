@@ -15,6 +15,7 @@ export type SiteChannel = {
   uptime?: number;
   contactUrl: string;
   contentType: string;
+  bitrate?: number;
   receiving: boolean;
   listeners: number;
   yellowPage?: string;

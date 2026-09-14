@@ -300,3 +300,19 @@ body:has(.site-app) {
   width: 56px;
   height: 56px;
 }
+
+.broadcast-details {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+}
+
+.broadcast-details dt {
+  font-weight: 600;
+}
+
+.broadcast-details dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

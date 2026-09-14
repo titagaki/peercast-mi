@@ -531,8 +531,11 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
       if (method === "POST") {
         expect(route.request().postDataJSON()).toEqual({
           name: "My live",
-          genre: "",
-          description: "",
+          genre: "Music",
+          description: "Live session",
+          comment: "リクエスト歓迎",
+          contactUrl: "https://bbs.jpnkn.com/board/",
+          bitrate: 3000,
         });
         created = true;
       }
@@ -541,7 +544,15 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
         json: {
           streamKey: key,
           rtmpUrl: "rtmps://live.example/live",
-          channel: created ? { ...ch, name: "My live" } : null,
+          channel: created
+            ? {
+                ...ch,
+                name: "My live",
+                description: "Live session",
+                comment: "リクエスト歓迎",
+                bitrate: 3000,
+              }
+            : null,
         },
       });
     }
@@ -558,10 +569,44 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
   await page
     .getByRole("textbox", { name: "配信名", exact: true })
     .fill("My live");
+  await page
+    .getByRole("textbox", { name: "ジャンル", exact: true })
+    .fill("Music");
+  await page
+    .getByRole("textbox", { name: "説明", exact: true })
+    .fill("Live session");
+  await page
+    .getByRole("textbox", { name: "コメント", exact: true })
+    .fill("リクエスト歓迎");
+  await page
+    .getByRole("textbox", { name: "コンタクトURL", exact: true })
+    .fill("https://bbs.jpnkn.com/board/");
+  await page
+    .getByRole("spinbutton", { name: "ビットレート (kbps)" })
+    .fill("3000");
   await page.getByRole("button", { name: "配信枠を作成", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "My live" })).toBeVisible();
+  await expect(
+    page.getByRole("status").filter({ hasText: "OBS接続待ち" }),
+  ).toBeVisible();
+  await expect(page.getByText("3000 kbps", { exact: true })).toBeVisible();
+  page.once("dialog", (d) => d.dismiss());
+  await page.getByRole("button", { name: "自分の配信を停止" }).click();
   await expect(page.getByRole("heading", { name: "My live" })).toBeVisible();
   page.on("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "自分の配信を停止" }).click();
+  await expect(
+    page.getByRole("textbox", { name: "配信名", exact: true }),
+  ).toHaveValue("My live");
+  await expect(
+    page.getByRole("textbox", { name: "コメント", exact: true }),
+  ).toHaveValue("リクエスト歓迎");
+  await expect(
+    page.getByRole("textbox", { name: "コンタクトURL", exact: true }),
+  ).toHaveValue("https://bbs.jpnkn.com/board/");
+  await expect(
+    page.getByRole("spinbutton", { name: "ビットレート (kbps)" }),
+  ).toHaveValue("3000");
   await expect(
     page.getByRole("textbox", { name: "配信名", exact: true }),
   ).toBeVisible();

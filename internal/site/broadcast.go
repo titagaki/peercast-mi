@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/titagaki/peercast-mi/internal/channel"
@@ -21,6 +22,7 @@ type channelView struct {
 	Uptime      *int   `json:"uptime,omitempty"`
 	ContactURL  string `json:"contactUrl"`
 	ContentType string `json:"contentType"`
+	Bitrate     uint32 `json:"bitrate"`
 	Receiving   bool   `json:"receiving"`
 	Listeners   int    `json:"listeners"`
 	YellowPage  string `json:"yellowPage,omitempty"`
@@ -29,7 +31,7 @@ type channelView struct {
 
 func view(ch *channel.Channel) channelView {
 	i := ch.Info()
-	v := channelView{ID: hex.EncodeToString(ch.ID[:]), Name: i.Name, Genre: i.Genre, Description: i.Desc, Comment: i.Comment, ContactURL: i.URL, ContentType: i.Type, Receiving: ch.IsReceiving(), Listeners: ch.TotalListeners()}
+	v := channelView{ID: hex.EncodeToString(ch.ID[:]), Name: i.Name, Genre: i.Genre, Description: i.Desc, Comment: i.Comment, ContactURL: i.URL, ContentType: i.Type, Bitrate: i.Bitrate, Receiving: ch.IsReceiving(), Listeners: ch.TotalListeners()}
 	// A local relay's age is not the broadcaster's uptime.
 	if ch.IsBroadcasting() {
 		uptime := int(ch.UptimeSeconds())
@@ -94,6 +96,9 @@ func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, ss *session) 
 		Name        string `json:"name"`
 		Genre       string `json:"genre"`
 		Description string `json:"description"`
+		Comment     string `json:"comment"`
+		ContactURL  string `json:"contactUrl"`
+		Bitrate     int64  `json:"bitrate"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 8192)
 	d := json.NewDecoder(r.Body)
@@ -107,9 +112,17 @@ func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, ss *session) 
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
-	if input.Name == "" || len(input.Name) > 256 || len(input.Genre) > 256 || len(input.Description) > 2048 {
+	if input.Name == "" || len(input.Name) > 256 || len(input.Genre) > 256 || len(input.Description) > 2048 || len(input.Comment) > 2048 || len(input.ContactURL) > 2048 || input.Bitrate < 0 || input.Bitrate > 2147483647 {
 		http.Error(w, "名前は必須です。入力の長さも確認してください。", 400)
 		return
+	}
+	input.ContactURL = strings.TrimSpace(input.ContactURL)
+	if input.ContactURL != "" {
+		u, err := url.Parse(input.ContactURL)
+		if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+			http.Error(w, "URLはHTTPまたはHTTPSのURLを入力してください。", http.StatusBadRequest)
+			return
+		}
 	}
 	s.mutate.Lock()
 	defer s.mutate.Unlock()
@@ -122,7 +135,7 @@ func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, ss *session) 
 		http.Error(w, "既に配信枠があります。停止後に作成してください。", 409)
 		return
 	}
-	ch, err := s.mgr.Broadcast(key, channel.ChannelInfo{Name: input.Name, Genre: input.Genre, Desc: input.Description, Type: "FLV", MIMEType: "video/x-flv", Ext: ".flv"}, channel.TrackInfo{})
+	ch, err := s.mgr.Broadcast(key, channel.ChannelInfo{Name: input.Name, Genre: input.Genre, Desc: input.Description, Comment: input.Comment, URL: input.ContactURL, Bitrate: uint32(input.Bitrate), Type: "FLV", MIMEType: "video/x-flv", Ext: ".flv"}, channel.TrackInfo{})
 	if err != nil {
 		http.Error(w, "配信枠を作成できませんでした。", 409)
 		return

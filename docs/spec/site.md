@@ -122,11 +122,11 @@ JSON の成功応答、失敗時は HTTP ステータスとテキストメッセ
 | `GET /site/api/channels/{id}/comments` | 任意の `thread`（数値 ID） | `{supported,threadId,threadTitle,commentCount,threads,comments}`。認証済み掲示板閲覧 |
 | `GET /site/api/broadcast` | なし | `{streamKey,rtmpUrl,channel:ChannelView|null}`。本人のキーのみ |
 | `POST /site/api/key` | CSRF | `{streamKey}`。生成 / 再発行。本人の配信枠がある間は 409 |
-| `POST /site/api/broadcast` | CSRF、JSON `{name,genre,description}` | `ChannelView`。1 ユーザー 1 枠。未発行キー / 既存枠は 409 |
+| `POST /site/api/broadcast` | CSRF、JSON `{name,genre,description,comment?,contactUrl?,bitrate?}` | `ChannelView`。1 ユーザー 1 枠。未発行キー / 既存枠は 409 |
 | `DELETE /site/api/broadcast` | CSRF | `{ok:true}`。本人の枠だけ停止。枠なしでも成功 |
 | `GET /site/stream/{id}` | 32 hex のチャンネル ID | 認証付き HTTP ストリーム。任意クエリは 400、一覧外 / 接続不可 404、視聴枠 / サイト中継数の上限 429、中継生成失敗 503 |
 
-`ChannelView` は `{id,name,genre,description,comment?,uptime?,contactUrl,contentType,receiving,listeners,yellowPage?,playable?}`。ID は小文字 hex。配信キー・ソース URL・接続先 IP を含めない。リレー・配信待機中のチャンネルも一覧対象。`yellowPage` は取得元の名前、`playable:false` はサイトが接続できる tracker がないことを表す（再生形式の対応判定とは別）。視聴者数の `-1` は非表示 / 不明。任意 `tip` 指定や汎用リレー生成 API はない。
+`ChannelView` は `{id,name,genre,description,comment?,uptime?,contactUrl,contentType,bitrate?,receiving,listeners,yellowPage?,playable?}`。ID は小文字 hex。配信キー・ソース URL・接続先 IP を含めない。リレー・配信待機中のチャンネルも一覧対象。`yellowPage` は取得元の名前、`playable:false` はサイトが接続できる tracker がないことを表す（再生形式の対応判定とは別）。視聴者数の `-1` は非表示 / 不明。任意 `tip` 指定や汎用リレー生成 API はない。
 
 ### YP の番組一覧
 
@@ -154,7 +154,7 @@ channels_url = "http://bayonet.ddo.jp/sp/index.txt"
 
 中継開始前に認証・サイト視聴枠・中継数を検査し、既存のノード共通中継上限も適用する。既定のサイト中継上限は 8。これは番組一覧数の上限ではない。同じ ID の中継を視聴者ごとに増やさない。視聴を閉じても共有中継は即停止せず、既存の `channel_cleanup_minutes`（既定 20 分、0 は自動削除なし）で未使用中継を回収する。公開 PCP 中継の認証・接続先規則は変更しない。
 
-配信設定は最大 8192 bytes の JSON。未定義フィールド・複数 JSON は拒否。名前は前後空白除去後に必須、最大 256 bytes、ジャンル 256 bytes、説明 2048 bytes。FLV チャンネルとして登録し、RTMP メタデータで実際のメディア情報を更新する。
+配信設定は最大 8192 bytes の JSON。未定義フィールド・複数 JSON は拒否。名前は前後空白除去後に必須、最大 256 bytes、ジャンル 256 bytes、説明・コメント・URL は各 2048 bytes。`comment` と `contactUrl` は省略時空文字。URL は前後空白除去後に空またはユーザー情報を含まない HTTP(S) の絶対URL。`bitrate` は kbps の整数で、省略・0 は自動、指定時は1〜2147483647。FLV チャンネルとして登録し、RTMP メタデータで実際のメディア情報を更新する。
 
 ## 配信キーとライフサイクル
 
@@ -194,7 +194,7 @@ ChannelView の任意フィールド `comment` は配信者コメント（掲示
 
 個別ページのマウントで FLV を mpegts.js の MediaSource に接続して音声付き自動再生を試みる。ブラウザーから `NotAllowedError` を受けたらミュートで再試行し、その状態を表示する。再試行も拒否された場合はプレイヤー内の再生操作を案内する。video の標準 controls に再生・一時停止・音量・ミュート・対応ブラウザーの全画面 / PiP を任せる。独自の「視聴する」「再生を開始」「全画面」「ミニプレイヤー」「視聴を閉じる」ボタンはない。メディアエラーは状態を表示し、ページ再読み込みを案内する。
 
-`/broadcast` へは「配信する」リンクで移動する。本人の配信キー発行・配信枠作成はこのページで行う。フッターはアプリ名のみ。YP の取得設定に関する状態表示は閲覧画面に出さない。
+`/broadcast` へは「配信する」リンクで移動する。本人の配信キー発行・配信枠作成はこのページで行う。配信名・ジャンル・説明・コメント・URL・ビットレートを入力でき、ビットレートの空欄は自動。コメントとURLはチャンネル情報に反映され、一覧・視聴ページにも返す。フッターはアプリ名のみ。YP の取得設定に関する状態表示は閲覧画面に出さない。
 
 Go のサイトサーバーは `/`・`/channels/<id>`・`/broadcast`・`/admin` にビルド済み UI を返し、従来の `/watch` は `/` へリダイレクトする。Vite 開発時も同じ UI パスを使える。管理画面の「配信を開始」とキー発行フォームはない。既存キーの確認・失効、チャンネルの停止・編集などは残す。管理 JSON-RPC のメソッドや認証方式は変更しない。`/admin` は UI の入口であって管理権限を与える仕組みではなく、許可リストに登録したX管理者だけがサイトの管理API入口を使える。直接の `/api/1` はサイトからプロキシしない。管理者専用の `/admin/api/1` を使う。
 
@@ -207,3 +207,9 @@ Go のサイトサーバーは `/`・`/channels/<id>`・`/broadcast`・`/admin` 
 クライアントの Cookie / Authorization / 転送ヘッダーをノードにそのまま渡さず、パスを組み直し内部 token だけを付ける。公開 PCP の接続数はサイトの接続枠に含めず、ノード側の制限で管理する。
 
 実装の理由は [ADR 0019](../decisions/0019-authenticated-site.md)、検証範囲は [実装記録](../reviews/2026-09-14-site-implementation.md) を参照。
+
+### 配信状態と停止
+
+配信ページは本人の状態を5秒ごとに取得し、配信枠があれば「OBS接続待ち」または「配信中」、ジャンル・説明・コメント・コンタクトURL・ビットレートを表示する。視聴ページへのリンクを提供する。`ChannelView.bitrate` はkbps（0は不明・自動）。自ノードの情報から設定する。
+
+停止はチャンネル名を示して確認し、失敗時は配信状態を維持してエラーを表示する。成功時は停止したチャンネル名を表示し、そのページ内の入力値に直前のチャンネル情報を戻す。同じ内容で再作成できるが、ページを閉じた後の履歴保存は行わない。停止後もキーは有効で、OBSの送信停止はOBS側で行う。

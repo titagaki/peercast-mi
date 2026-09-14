@@ -313,11 +313,14 @@ function WatchPage({ id }: { id: string }) {
 }
 
 function Broadcast({ csrf }: { csrf: string }) {
-  const own = useResource(loadBroadcast);
+  const own = useResource(loadBroadcast, 5000);
   const action = useAction();
   const [name, setName] = useState("");
   const [genre, setGenre] = useState("");
   const [description, setDescription] = useState("");
+  const [comment, setComment] = useState("");
+  const [contactUrl, setContactUrl] = useState("");
+  const [bitrate, setBitrate] = useState("");
   return (
     <section className="panel">
       <h2>配信する</h2>
@@ -364,15 +367,52 @@ function Broadcast({ csrf }: { csrf: string }) {
           {own.data.channel ? (
             <>
               <h3>{own.data.channel.name}</h3>
-              <p>配信枠が作成されています。</p>
+              <p role="status">
+                {own.data.channel.receiving ? "配信中" : "OBS接続待ち"}
+              </p>
+              <dl className="broadcast-details">
+                <dt>ジャンル</dt>
+                <dd>{own.data.channel.genre || "—"}</dd>
+                <dt>説明</dt>
+                <dd>{own.data.channel.description || "—"}</dd>
+                <dt>コメント</dt>
+                <dd>{own.data.channel.comment || "—"}</dd>
+                <dt>コンタクトURL</dt>
+                <dd>{own.data.channel.contactUrl || "—"}</dd>
+                <dt>ビットレート</dt>
+                <dd>
+                  {own.data.channel.bitrate
+                    ? `${own.data.channel.bitrate} kbps`
+                    : "自動"}
+                </dd>
+              </dl>
+              <p>
+                <a href={siteURL(`/channels/${own.data.channel.id}`)}>
+                  視聴ページを開く
+                </a>
+              </p>
+              <p>
+                配信停止後は、OBS側でも送信を停止してください。配信キーは引き続き使えます。
+              </p>
               <button
-                disabled={action.busy}
+                disabled={action.busy || own.loading || !!own.error}
                 onClick={() => {
-                  if (!window.confirm("自分の配信を停止しますか？")) return;
+                  const current = own.data?.channel;
+                  if (
+                    !current ||
+                    !window.confirm(`「${current.name}」の配信を停止しますか？`)
+                  )
+                    return;
                   void action.run(async () => {
                     await siteAPI("broadcast", { method: "DELETE", csrf });
+                    setName(current.name);
+                    setGenre(current.genre);
+                    setDescription(current.description);
+                    setComment(current.comment ?? "");
+                    setContactUrl(current.contactUrl);
+                    setBitrate(current.bitrate ? String(current.bitrate) : "");
                     own.reload();
-                  }, "配信を停止しました。");
+                  }, `「${current.name}」の配信を停止しました。入力内容を引き継いで再作成できます。`);
                 }}
               >
                 自分の配信を停止
@@ -386,7 +426,14 @@ function Broadcast({ csrf }: { csrf: string }) {
                   await siteAPI("broadcast", {
                     method: "POST",
                     csrf,
-                    body: { name, genre, description },
+                    body: {
+                      name,
+                      genre,
+                      description,
+                      comment,
+                      contactUrl,
+                      bitrate: bitrate === "" ? 0 : Number(bitrate),
+                    },
                   });
                   own.reload();
                 }, "配信枠を作成しました。配信ソフトで送信を開始してください。");
@@ -420,6 +467,36 @@ function Broadcast({ csrf }: { csrf: string }) {
                       maxLength={600}
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    コメント
+                    <textarea
+                      maxLength={600}
+                      value={comment}
+                      onChange={(e) => setComment(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    コンタクトURL
+                    <input
+                      type="url"
+                      maxLength={2048}
+                      value={contactUrl}
+                      onChange={(e) => setContactUrl(e.target.value)}
+                      placeholder="https://…"
+                    />
+                  </label>
+                  <label>
+                    ビットレート (kbps)
+                    <input
+                      type="number"
+                      min="1"
+                      max="2147483647"
+                      step="1"
+                      placeholder="自動"
+                      value={bitrate}
+                      onChange={(e) => setBitrate(e.target.value)}
                     />
                   </label>
                 </div>
