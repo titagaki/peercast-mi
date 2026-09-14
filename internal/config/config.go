@@ -38,6 +38,7 @@ func (y *YP) HostPort() (string, error) {
 }
 
 type Config struct {
+	PublicIPv4   string `toml:"public_ipv4"` // Explicit advertised address for NAT/container deployments.
 	Site         Site   `toml:"site"`
 	RTMPPort     int    `toml:"rtmp_port"`
 	PeercastPort int    `toml:"peercast_port"`
@@ -142,6 +143,12 @@ func Load(path string) (*Config, error) {
 	}
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	if cfg.PublicIPv4 != "" {
+		ip := net.ParseIP(cfg.PublicIPv4)
+		if ip == nil || ip.To4() == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() {
+			return nil, fmt.Errorf("config: public_ipv4 must be a public IPv4 literal")
+		}
 	}
 	return &cfg, nil
 }

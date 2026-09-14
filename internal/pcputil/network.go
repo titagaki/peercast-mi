@@ -89,8 +89,17 @@ type networkStatus struct {
 
 // NetworkState shares the latest observed address and port status per family.
 type NetworkState struct {
-	mu     sync.RWMutex
-	v4, v6 networkStatus
+	mu         sync.RWMutex
+	v4, v6     networkStatus
+	publicIPv4 net.IP
+}
+
+// SetPublicIPv4 overrides only the advertised IPv4 address, not port checks.
+// The caller validates the operator-configured address before setting it.
+func (n *NetworkState) SetPublicIPv4(ip net.IP) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.publicIPv4 = append(net.IP(nil), ip.To4()...)
 }
 
 func (n *NetworkState) Observe(oleh *pcp.Atom) {
@@ -123,6 +132,9 @@ func (n *NetworkState) Status(local net.IP) (ip net.IP, known, open bool) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	s := n.v4
+	if len(n.publicIPv4) != 0 {
+		s.ip = n.publicIPv4
+	}
 	if ProtocolVersion(local) == 100 {
 		s = n.v6
 	}

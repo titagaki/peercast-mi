@@ -823,3 +823,7 @@ type ChannelManager interface {
 許可したオリジンにはワイルドカードではなくそのオリジンを `Access-Control-Allow-Origin` に返し、`Vary: Origin` を付ける。
 
 API の詳細仕様 (メソッド一覧・リクエスト/レスポンス形式・フィールド説明) は [api/jsonrpc.md](api/jsonrpc.md) を参照。
+
+## 公開IPv4の明示指定
+
+トップレベル `public_ipv4` は公開IPv4リテラルを指定する。省略時はOLEHの観測値を使う。指定時は共有NetworkStateがHOSTの第1IP（公開側）に設定値を使い、第2IP（ローカル側）は接続元のローカルIPを使う。YP向けBCSTと下流向けHOSTで共有する。OLEHの観測値を保存し続け、ポートのknown/openとIPv6の自動判定は維持する。ポートはpeercast_portを使うためNATの内外で同じ番号を転送する。ホスト名・非IPv4・private/loopback/multicast/unspecifiedは起動時に拒否する。設定変更は再起動で反映する。

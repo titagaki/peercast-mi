@@ -40,3 +40,9 @@
 サイト作成時のジャンルにypを自動補完した。pcgw `8cab31088104089f0649eef908594e570f26fbce`（作業ツリーclean）の `routes/broadcast.rb` のgenreも `models/yellow_page.rb` のadd_prefixを呼び、掲載先の接頭辞がなければ付ける。miでは固定掲載運用のypを補完する。pcgwの任意掲載先別prefix設定は導入しない。
 
 `TestBroadcastAddsPublicationGenrePrefix` で空欄・通常ジャンル・前後空白・既存接頭辞・制御文字列を検証し、ChannelInfoからPCPへ渡るGenreも確認した。`go vet ./...`、`go test ./...` は成功。本番への適用と実際の掲載は未確認。既存枠はジャンル編集または停止後の作り直しが必要。
+
+### 掲載先IPの修正
+
+本番ログにRTMP認証・stream started、YP接続成功を確認。公開0yp APIの取得でいまいch掲載とtracker=172.20.0.4:7154を確認した。0ypのprocessBcst/ParseHostAtomはHOSTの公開IPを保存し、writeOlehはTCP接続元IPを返す（参照版は上記と同じ）。miはOLEHの内部IPを公開HOSTへ使っていた。
+
+public_ipv4設定を追加し、共有NetworkState経由で公開HOSTのみ設定値を優先する。go vet ./... / go test ./...成功。追加テストで設定バリデーション、内部OLEHで上書きされないこと、ポート疎通・FWフラグ維持、IPv6維持、未指定への復帰を検証した。外部TCP 153.127.50.98:7154接続も成功。新設定の本番適用・公開IPへの掲載更新・外部PCP再生は未確認。

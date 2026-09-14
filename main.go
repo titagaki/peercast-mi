@@ -55,6 +55,10 @@ func main() {
 	slog.Info("startup", "session_id", sessionID, "broadcast_id", broadcastID)
 
 	mgr := channel.NewManager(broadcastID)
+	if cfg.PublicIPv4 != "" {
+		mgr.Network.SetPublicIPv4(net.ParseIP(cfg.PublicIPv4))
+		slog.Info("network: explicit public IPv4", "address", cfg.PublicIPv4)
+	}
 	mgr.MaxRelays, mgr.MaxListeners = cfg.MaxRelays, cfg.MaxListeners
 	mgr.MaxRelaysTotal, mgr.MaxUpstreamKbps = cfg.MaxRelaysTotal, cfg.MaxUpstreamKbps
 	mgr.ContentBufferSeconds = cfg.ContentBufferSeconds

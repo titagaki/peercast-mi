@@ -40,4 +40,5 @@
 | [0025](0025-mobile-stream-keys.md) | サイト発行キーを小文字英字2文字＋数字4桁にする | 採用 |
 | [0026](0026-directory-membership.md) | サイト一覧の掲載対象はYPカタログで決める | 採用 |
 | [0027](0027-publication-genre-prefix.md) | サイト配信のジャンルに掲載用yp接頭辞を補う | 採用 |
+| [0028](0028-public-ipv4.md) | NAT内ノードの公開IPv4を明示設定できるようにする | 採用 |
 | [peercaststation-compat](peercaststation-compat.md) | PeerCastStation との挙動合わせ (複数項目) | 採用 |
