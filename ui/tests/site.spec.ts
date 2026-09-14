@@ -535,7 +535,7 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
           description: "Live session",
           comment: "リクエスト歓迎",
           contactUrl: "https://bbs.jpnkn.com/board/",
-          bitrate: 3000,
+          bitrate: 0,
         });
         created = true;
       }
@@ -581,9 +581,7 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
   await page
     .getByRole("textbox", { name: "コンタクトURL", exact: true })
     .fill("https://bbs.jpnkn.com/board/");
-  await page
-    .getByRole("spinbutton", { name: "ビットレート (kbps)" })
-    .fill("3000");
+  await expect(page.getByRole("spinbutton", { name: "ビットレート (kbps)" })).toHaveCount(0);
   await page.getByRole("button", { name: "配信枠を作成", exact: true }).click();
   await expect(page.getByRole("heading", { name: "My live" })).toBeVisible();
   await expect(
@@ -606,7 +604,7 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
   ).toHaveValue("https://bbs.jpnkn.com/board/");
   await expect(
     page.getByRole("spinbutton", { name: "ビットレート (kbps)" }),
-  ).toHaveValue("3000");
+  ).toHaveCount(0);
   await expect(
     page.getByRole("textbox", { name: "配信名", exact: true }),
   ).toBeVisible();

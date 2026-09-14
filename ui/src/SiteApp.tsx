@@ -320,7 +320,6 @@ function Broadcast({ csrf }: { csrf: string }) {
   const [description, setDescription] = useState("");
   const [comment, setComment] = useState("");
   const [contactUrl, setContactUrl] = useState("");
-  const [bitrate, setBitrate] = useState("");
   return (
     <section className="panel">
       <h2>配信する</h2>
@@ -414,7 +413,6 @@ function Broadcast({ csrf }: { csrf: string }) {
                     setDescription(current.description);
                     setComment(current.comment ?? "");
                     setContactUrl(current.contactUrl);
-                    setBitrate(current.bitrate ? String(current.bitrate) : "");
                     own.reload();
                   }, `「${current.name}」の配信を停止しました。入力内容を引き継いで再作成できます。`);
                 }}
@@ -436,7 +434,7 @@ function Broadcast({ csrf }: { csrf: string }) {
                       description,
                       comment,
                       contactUrl,
-                      bitrate: bitrate === "" ? 0 : Number(bitrate),
+                      bitrate: 0,
                     },
                   });
                   own.reload();
@@ -489,18 +487,6 @@ function Broadcast({ csrf }: { csrf: string }) {
                       value={contactUrl}
                       onChange={(e) => setContactUrl(e.target.value)}
                       placeholder="https://…"
-                    />
-                  </label>
-                  <label>
-                    ビットレート (kbps)
-                    <input
-                      type="number"
-                      min="1"
-                      max="2147483647"
-                      step="1"
-                      placeholder="自動"
-                      value={bitrate}
-                      onChange={(e) => setBitrate(e.target.value)}
                     />
                   </label>
                 </div>

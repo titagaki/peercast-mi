@@ -35,3 +35,11 @@ miには共通入力項目の復元に加え、OBS接続待ち／配信中と登
 `go vet ./...`・`go test ./...` 成功。UIのlint・ビルド成功。配信フォームのPlaywrightをdesktop/mobile/darkで実行し3件成功。入力全項目の送信、接続待ち表示、停止キャンセル、停止後の入力引き継ぎを確認した。既存Goテストで他人の配信を停止できないことも継続検証。ビルドは既存の500kB超チャンク警告を出す。`git diff --check` 成功。実OBSと本番画面での今回変更の検証は未実施。
 
 掲載YP選択はpcgwに存在するが、ユーザーが固定の掲載先のみでよいと指定したため追加しない。本番の掲載先は0ypのまま。
+
+## 続報: 配信開始時のビットレート入力を削除
+
+ユーザーの指定により2026-09-14に入力欄を削除した。pcgw参照版は `8cab31088104089f0649eef908594e570f26fbce`、作業ツリーclean。`views/form.slim` に入力欄はなく、`routes/broadcast.rb` の `to_h` は `bitrate: 0` 固定。`routes/channels.rb` はノードの `info.bitrate` と `source_connection.recvRateKbps` を別々に取得して表示する。pcgw自身が入力値からビットレートを計算する処理ではない。今回の比較はpcgwのフォーム・作成パラメータ・状態表示までで、pcgwが接続するノード内部のレート計算は未確認。
+
+miのフォームも0固定で作成する。既存 `internal/rtmp/server.go` の `applyMetaInfo` がmaxBitrate（優先）/videodatarateとaudiodatarateを読み取って反映する。メタデータがなければ0のままで、実測帯域を推定する機能は今回追加しない。状態表示のビットレートとAPIの任意bitrate入力は維持する。
+
+UI lint/build成功、Playwright配信ワークフローdesktop/mobile/darkの3件成功（入力欄なし、送信値0、取得したレート表示を検証）。既存500 kB超チャンク警告あり。既存 `go test ./internal/rtmp -run TestApplyMetaInfo -count=1` 成功。Go実装の変更なし。最初のnpm検証は誤ってリポジトリ直下で実行してpackage.json不在となり、uiディレクトリで再実行して成功。本番とスマホ実機での反映確認は未実施。
