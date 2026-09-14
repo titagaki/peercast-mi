@@ -30,3 +30,7 @@
 ユーザーの追加報告に対して `internal/site/directory.go` の `channelList` を確認。カタログにないローカルチャンネルを末尾へ追加していた。これを削除し、カタログに掲載されたIDだけを一覧へ返すよう変更した。サイト本人用配信APIと管理APIのローカル表示は維持。yayaue.meの本番設定からSP・p@YPのchannels_urlを除き、0ypだけを一覧取得元にした。ジャンルの自動補完はこの変更に含めない。
 
 `TestDirectoryExcludesUnlistedLocalBroadcast` を追加。取得元未設定・空一覧・掲載・掲載終了で両一覧APIの件数を確認し、未掲載でも本人が配信枠を確認できることを検証。`go vet ./...` と `go test ./...` は成功。本番TOMLのパースと取得URLが0ypだけであることも成功。本番適用は未実施。
+
+### 取得元の訂正
+
+ユーザーへの再確認で、0yp限定は依頼の誤解と判明した。3YP取得を維持し、未掲載ローカル枠だけを除外する意図だった。yayaue.meでSP・p@YPのchannels_urlを復元し、TOMLパースと3件のURL・順序を検証済み。miの一覧実装はそのまま。
