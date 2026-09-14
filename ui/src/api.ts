@@ -1,11 +1,20 @@
+import { siteURL } from "./site-path";
 // Minimal JSON-RPC 2.0 client for peercast-mi.
 //
 // Vite uses a different origin. The server allows loopback origins by default;
 // other UI origins must be explicitly allowed in the backend configuration.
 
+let adminCSRF = "";
+export const setAdminCSRF = (token: string) => {
+  adminCSRF = token;
+};
+
+const SITE_ENDPOINT = siteURL("/admin/api/1");
 const ENDPOINT =
-  (import.meta.env.VITE_PEERCAST_ENDPOINT as string | undefined) ??
-  "http://127.0.0.1:7144/api/1";
+  (import.meta.env.VITE_PEERCAST_ENDPOINT as string | undefined)?.trim() ||
+  (import.meta.env.DEV ? "http://127.0.0.1:7144/api/1" : SITE_ENDPOINT);
+
+export const usesSiteAdmin = ENDPOINT === SITE_ENDPOINT;
 
 export class RpcError extends Error {
   code: number;
@@ -26,7 +35,11 @@ export async function rpc<T = unknown>(
   const timeout = AbortSignal.timeout(15000);
   const res = await fetch(ENDPOINT, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...(ENDPOINT === SITE_ENDPOINT ? { "X-CSRF-Token": adminCSRF } : {}),
+    },
     body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });

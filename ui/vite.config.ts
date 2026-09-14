@@ -39,7 +39,11 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       strictPort: true,
       // Do not proxy the administrative /api/1 endpoint.
-      proxy: { [`${base}/site/`]: siteProxy, [`${base}/auth/`]: siteProxy },
+      proxy: {
+        [`${base}/site/`]: siteProxy,
+        [`${base}/auth/`]: siteProxy,
+        [`${base}/admin/api/`]: siteProxy,
+      },
     },
   };
 });

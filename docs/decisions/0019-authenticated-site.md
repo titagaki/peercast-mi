@@ -44,3 +44,5 @@
 - [サイト仕様・導入手順](../spec/site.md)
 - [ADR 0007](0007-stream-key-store.md)、[ADR 0009](0009-jsonrpc-api-design-policy.md)、[ADR 0016](0016-relay-request-source-policy.md)
 - [X OAuth 2.0](https://docs.x.com/fundamentals/authentication/oauth-2-0/user-access-token)、[本人情報取得](https://docs.x.com/x-api/users/lookup/quickstart/authenticated-lookup)（実装時に公式資料を確認）
+
+管理パネルについては [ADR 0024](0024-site-admin-x-allowlist.md) で、指定X管理者の認証を伴うサイト専用経路を追加した。一般利用者向けの汎用転送は行わない。

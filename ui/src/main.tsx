@@ -1,3 +1,5 @@
+import SiteAdmin from "./SiteAdmin";
+import { usesSiteAdmin } from "./api";
 import { sitePath } from "./site-path";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -7,6 +9,14 @@ import SiteApp from "./SiteApp.tsx";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {/^\/admin\/?$/.test(sitePath()) ? <App /> : <SiteApp />}
+    {/^\/admin\/?$/.test(sitePath()) ? (
+      usesSiteAdmin ? (
+        <SiteAdmin />
+      ) : (
+        <App />
+      )
+    ) : (
+      <SiteApp />
+    )}
   </StrictMode>,
 );

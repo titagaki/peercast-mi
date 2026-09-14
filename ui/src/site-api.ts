@@ -3,6 +3,7 @@ export type SiteUser = { id: string; name: string };
 export type SiteSession = {
   user: SiteUser | null;
   csrf?: string;
+  admin?: boolean;
   devLogin?: boolean;
 };
 export type SiteChannel = {

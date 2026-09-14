@@ -45,7 +45,7 @@ func TestBasePathRoutesAndIsolation(t *testing.T) {
 	if w := call(s, "GET", "/mi/site/stream/0123456789abcdef0123456789abcdef", "", "", ""); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
-	for _, next := range []string{"/", "/broadcast", "/mi/admin", "/mi/../broadcast", "//evil.test", "/mismatch/broadcast", "/mi//evil.test"} {
+	for _, next := range []string{"/", "/broadcast", "/mi/../broadcast", "//evil.test", "/mismatch/broadcast", "/mi//evil.test"} {
 		if got := s.returnPath(next); got != "/mi/" {
 			t.Errorf("%s: %s", next, got)
 		}

@@ -96,3 +96,9 @@ Playwright はテスト専用 Vite (127.0.0.1:4173、strictPort) を起動し、
 ## `/mi/` への配置
 
 Go の `[site]` に `base_path = "/mi"` を設定し、UI は `PEERCAST_SITE_BASE_PATH=/mi npm run build` でビルドします。開発時は同じ変数を `npm run dev` に渡し、`/mi/` を開きます。`site.origin` はパスを含めません。X callback とプロキシの指定は [サイト仕様](../docs/spec/site.md#サブパスへの配置) を参照してください。
+
+## 公開サイトの管理パネル
+
+本番ビルドは公開接頭辞を含む `/admin/api/1` に接続します。Go の `site.admin_x_ids` に登録した数値IDのXアカウントでログインしてください。一般利用者と未ログイン状態では管理画面を利用できません。管理API側でもセッション・許可ID・Origin・CSRFを検証します。
+
+Vite開発では従来のローカル管理APIが既定です。公開サイトと同じ経路を使う場合は `VITE_PEERCAST_ENDPOINT=/mi/admin/api/1` と `PEERCAST_SITE_BASE_PATH=/mi` を指定します。通常のXログインとGoの許可ID設定が必要です。`dev_login` では管理権限は取得できません。単独の管理UIをビルドする場合も `VITE_PEERCAST_ENDPOINT` で実際の接続先を指定できます。

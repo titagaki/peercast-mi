@@ -534,3 +534,7 @@ YP 単位の失敗は RPC エラーにはせず、最終成功から 5 分未満
 - `getChannelConnections` の `recvRate` は常に `0`（受信レートの計測は未実装）。
 - `getChannelRelayTree` の自ノード `address` は当該 family のグローバル IP 未取得時のみ空文字列。
 - BroadcastID は `broadcast_id` に永続化され、同じ配信パラメータ・StreamKey なら再起動後も ChannelID を維持する。導入前のランダム ID は復元できない。
+
+## サイトの管理者用入口
+
+サイト有効時の `POST <base_path>/admin/api/1` は、許可されたX管理者のセッション・Origin・CSRFを検証したうえで本APIに中継する。メソッド・引数・結果・JSON-RPCエラーは同じ。入口での拒否はHTTPエラー。[サイト仕様](../site.md#管理パネル)を参照。直接 `/api/1` の認証規則は変更しない。

@@ -80,16 +80,17 @@ type Config struct {
 
 // Site is opt-in; secrets are read from the named process environment variables.
 type Site struct {
-	MaxRelayChannels  int    `toml:"max_relay_channels"`
-	DevLogin          bool   `toml:"dev_login"`
-	Enabled           bool   `toml:"enabled"`
-	Listen            string `toml:"listen"`
-	Origin            string `toml:"origin"`
-	BasePath          string `toml:"base_path"`
-	UIDir             string `toml:"ui_dir"`
-	RTMPURL           string `toml:"rtmp_url"`
-	MaxViewers        int    `toml:"max_viewers"`
-	MaxViewersPerUser int    `toml:"max_viewers_per_user"`
+	AdminXIDs         []string `toml:"admin_x_ids"`
+	MaxRelayChannels  int      `toml:"max_relay_channels"`
+	DevLogin          bool     `toml:"dev_login"`
+	Enabled           bool     `toml:"enabled"`
+	Listen            string   `toml:"listen"`
+	Origin            string   `toml:"origin"`
+	BasePath          string   `toml:"base_path"`
+	UIDir             string   `toml:"ui_dir"`
+	RTMPURL           string   `toml:"rtmp_url"`
+	MaxViewers        int      `toml:"max_viewers"`
+	MaxViewersPerUser int      `toml:"max_viewers_per_user"`
 }
 
 func defaults() Config {

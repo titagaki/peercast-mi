@@ -1,5 +1,5 @@
-// Package site provides the opt-in, unprivileged viewing and broadcasting site.
-// It does not expose the node's administrative JSON-RPC API.
+// Package site provides opt-in viewing and broadcasting with X authentication.
+// Administrative JSON-RPC access requires an explicitly allowed X user.
 package site
 
 import (
@@ -57,6 +57,8 @@ type Server struct {
 	mgr                                 *channel.Manager
 	bump                                func()
 	clientID, clientSecret, viewerToken string
+	adminIDs                            map[string]bool
+	adminProxy                          *httputil.ReverseProxy
 	client                              *http.Client
 	tokenURL, meURL                     string
 	proxy                               *httputil.ReverseProxy
@@ -124,16 +126,40 @@ func New(cfg config.Site, mgr *channel.Manager, backendPort int, bump func()) (*
 	if r, e := url.Parse(cfg.RTMPURL); e != nil || r.Host == "" || (r.Scheme != "rtmp" && r.Scheme != "rtmps") || r.User != nil || r.RawQuery != "" || r.Fragment != "" {
 		return nil, errors.New("site.rtmp_url must be the public RTMP(S) application URL")
 	}
+	adminIDs := make(map[string]bool)
+	for _, value := range cfg.AdminXIDs {
+		if value == "" || len(value) > 32 || strings.Trim(value, "0123456789") != "" {
+			return nil, errors.New("site.admin_x_ids must contain numeric X user IDs")
+		}
+		adminIDs[value] = true
+	}
 	clientID, secret := os.Getenv("PEERCAST_X_CLIENT_ID"), os.Getenv("PEERCAST_X_CLIENT_SECRET")
 	if !cfg.DevLogin && (clientID == "" || secret == "") {
 		return nil, errors.New("PEERCAST_X_CLIENT_ID and PEERCAST_X_CLIENT_SECRET are required")
 	}
-	s := &Server{cfg: cfg, mgr: mgr, bump: bump, clientID: clientID, clientSecret: secret, viewerToken: randomToken(),
+	s := &Server{adminIDs: adminIDs, cfg: cfg, mgr: mgr, bump: bump, clientID: clientID, clientSecret: secret, viewerToken: randomToken(),
 		client:   &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		boards:   newBoardReader(),
 		tokenURL: "https://api.x.com/2/oauth2/token", meURL: "https://api.x.com/2/users/me",
 		sessions: make(map[string]*session), flows: make(map[string]flow), viewers: make(map[string]int)}
 	backend, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", backendPort))
+	s.adminProxy = &httputil.ReverseProxy{
+		Rewrite: func(p *httputil.ProxyRequest) {
+			p.SetURL(backend)
+			p.Out.URL.Path = "/api/1"
+			p.Out.URL.RawPath = ""
+			p.Out.URL.RawQuery = ""
+			// Only an authorized X administrator with valid CSRF reaches this proxy.
+			// Never forward browser credentials or origin to the loopback-only hop.
+			p.Out.Header = make(http.Header)
+			p.Out.Header.Set("Content-Type", "application/json")
+		},
+		Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext, ResponseHeaderTimeout: 20 * time.Second},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, "管理APIに接続できません。", http.StatusBadGateway)
+		},
+	}
+
 	s.proxy = &httputil.ReverseProxy{Rewrite: func(p *httputil.ProxyRequest) {
 		p.SetURL(backend)
 		p.Out.URL.Path = "/stream/" + p.In.PathValue("id")
@@ -219,7 +245,7 @@ func (s *Server) Handler() http.Handler {
 			reply(w, map[string]any{"user": nil, "devLogin": s.cfg.DevLogin})
 			return
 		}
-		reply(w, map[string]any{"user": ss.User, "csrf": ss.CSRF, "devLogin": s.cfg.DevLogin})
+		reply(w, map[string]any{"user": ss.User, "csrf": ss.CSRF, "admin": s.isAdmin(ss), "devLogin": s.cfg.DevLogin})
 	})
 	protected := func(pattern string, h func(http.ResponseWriter, *http.Request, *session)) {
 		handleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +270,7 @@ func (s *Server) Handler() http.Handler {
 	protected("POST /site/api/broadcast", s.broadcast)
 	protected("DELETE /site/api/broadcast", s.stopBroadcast)
 	protected("GET /site/stream/{id}", s.stream)
-	// Serve only the compiled UI, never project files or the administrative API.
+	// Serve only compiled UI assets, never project files.
 	handleFunc("GET /favicon.svg", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(s.cfg.UIDir, "favicon.svg"))
 	})
@@ -261,8 +287,10 @@ func (s *Server) Handler() http.Handler {
 		page(w, r)
 	})
 	handleFunc("GET /broadcast", page)
+	// The UI gate renders login/permission states; the API independently checks authorization.
 	handleFunc("GET /admin", page)
 	handleFunc("GET /admin/{$}", page)
+	protected("POST /admin/api/1", s.adminRPC)
 	handleFunc("GET /watch", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, s.cfg.BasePath+"/", http.StatusFound)
 	})
@@ -489,6 +517,9 @@ func (s *Server) returnPath(value string) string {
 			return s.cfg.BasePath + "/"
 		}
 		value = strings.TrimPrefix(value, s.cfg.BasePath)
+	}
+	if value == "/admin" || value == "/admin/" {
+		return s.cfg.BasePath + "/admin"
 	}
 	return s.cfg.BasePath + safeReturnPath(value)
 }

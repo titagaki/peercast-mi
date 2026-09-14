@@ -82,3 +82,41 @@ test("compiled /mi site keeps navigation, login and media under its mount point"
   expect(requests.some((path) => path.startsWith("/mi/assets/"))).toBe(true);
   expect(requests.filter((path) => !path.startsWith("/mi/"))).toEqual([]);
 });
+
+test("production admin checks X permissions and sends same-origin RPC with CSRF", async ({
+  page,
+}) => {
+  let role = "anonymous";
+  const calls: string[] = [];
+  await page.route("**/mi/site/api/me", (r) =>
+    r.fulfill({
+      json: {
+        user: role === "anonymous" ? null : { id: "123", name: "Viewer" },
+        admin: role === "admin",
+        csrf: "admin-csrf",
+      },
+    }),
+  );
+  await page.route("**/mi/admin/api/1", (r) => {
+    expect(r.request().headers()["x-csrf-token"]).toBe("admin-csrf");
+    const rpc = r.request().postDataJSON();
+    calls.push(rpc.method);
+    return r.fulfill({ json: { jsonrpc: "2.0", id: rpc.id, result: [] } });
+  });
+  await page.goto("/mi/admin");
+  await expect(
+    page.getByRole("link", { name: "X でログイン" }),
+  ).toHaveAttribute("href", "/mi/auth/x/start?next=%2Fmi%2Fadmin");
+  expect(calls).toEqual([]);
+  role = "viewer";
+  await page.reload();
+  await expect(page.getByRole("alert")).toContainText("管理権限がありません");
+  expect(calls).toEqual([]);
+  role = "admin";
+  await page.reload();
+  await expect.poll(() => calls.includes("getChannels")).toBe(true);
+  await page
+    .getByRole("button", { name: "ストリームキー", exact: true })
+    .click();
+  await expect.poll(() => calls.includes("listStreamKeys")).toBe(true);
+});
