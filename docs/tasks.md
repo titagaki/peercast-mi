@@ -15,23 +15,26 @@
 
 ### 機能
 
-- [ ] X アプリ・公開 HTTPS / RTMP を設定し、実ログイン、OBS → サイト視聴、他ノードへの公開 PCP 中継を結合検証する — [導入手順](spec/site.md)、[実装記録](reviews/2026-09-14-site-implementation.md)。秘密情報・公開 URL は利用環境で設定する。`yayaue.me/mi/` 向けのローカル設定は追加済み、本番適用は未実施。OBS入力はユーザー指定により公開RTMP＋ストリームキー認証 — [サブパス検証](reviews/2026-09-14-site-base-path.md)
+- [ ] 公開IPv4修正後のYP tracker値と他ノードからのPCP再生を独立確認する — Xログイン・サイト視聴・管理パネル読み込み・配信成功はユーザー確認済み。最終VPS版と外部PCP相互接続は未確認。[本番引き継ぎ](handoffs/2026-09-14-production.md)
 - [ ] 視聴サイトを拡充する: お気に入り同期、HLS とスマホ実機検証、通知 — [比較表](reviews/2026-09-14-peca-live-viewing-auth-design.md)。外部 YP 一覧は [ADR 0021](decisions/0021-yp-channel-directory.md)、掲示板閲覧は [ADR 0022](decisions/0022-viewing-pages-and-comments.md) で追加済み
 - [ ] 公開運用に合わせて利用者別レート制限 / 帯域割当、アカウント停止と既存配信接続の切断を設計する — [ADR 0019](decisions/0019-authenticated-site.md)。現在は X ログイン成功者が利用可、視聴の同時接続数を制限
 
 ### 保守
 
+- [ ] 管理接続一覧のsourceの通信量表示を見直す — sendRate/recvRateは0固定。入力実測と未計測表示を区別する。今回の0.0 kbps表示が受信不良と誤解された。
+
 - [ ] UI の既存開発依存 (Vite など) の audit 指摘を精査・更新し、ビルドとブラウザーテストを再実行する — [UI 改善記録](reviews/2026-09-14-ui-improvements.md)。2026-09-14 時点で 9 件 (high 6 / moderate 2 / low 1)
 
 ## 進行中
 
-- [ ] 本番管理パネル修正を適用し、指定X管理者での操作を確認する — [調査記録](reviews/2026-09-14-site-admin-connection.md)。X許可リスト・管理API経路・UI修正とローカル検証は完了、本番適用は未実施
 
 ## 保留
 
 - [ ] Web UI (`ui/`) を LAN 上の別ホストから使う場合の `allowed_origins` 設定を UI 側のセットアップ手順に書く — [decisions/0011](decisions/0011-cors-policy.md)。UI の配布方法が決まってから
 
 ## 完了
+
+- [x] 2026-09-14 本番X管理パネル、配信フォーム、短いキー、YP掲載条件、公開IPv4と設定棚卸し — [本番引き継ぎ](handoffs/2026-09-14-production.md)。管理情報読み込み・配信成功をユーザー確認。
 
 - [x] 2026-09-14 サイトを白基調・スマホ向けメニューに調整し、ぺからいぶを参考に文字情報・YP アイコン・カード全体リンクを追加。YP4G ジャンル制御部分を表示から除去 — [表示調整](reviews/2026-09-14-site-white-channel-info.md)、[ジャンル規則](reviews/2026-09-14-site-genre-controls.md)、[セッション引き継ぎ](handoffs/2026-09-14.md)
 
