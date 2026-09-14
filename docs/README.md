@@ -33,6 +33,8 @@ peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp
 
 ## reviews/
 
+- [2026-09-14-yp-publication-genre.md](reviews/2026-09-14-yp-publication-genre.md) — BCST送信と0ypのジャンル接頭辞による掲載条件
+
 - [2026-09-14-mobile-stream-keys.md](reviews/2026-09-14-mobile-stream-keys.md) — スマホ向け短い配信キーとRTMP試行制限の検証
 
 - [2026-09-14-broadcast-fields.md](reviews/2026-09-14-broadcast-fields.md) — 配信フォームのコメント・URL・ビットレート復元

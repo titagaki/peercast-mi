@@ -35,7 +35,6 @@ func (s *Server) channelList(r *http.Request) ([]channelView, []catalog.Status, 
 	for _, ch := range s.mgr.List() {
 		local := view(ch)
 		if !seen[local.ID] {
-			rows = append(rows, local)
 			continue
 		}
 		for i := range rows {

@@ -117,7 +117,7 @@ JSON の成功応答、失敗時は HTTP ステータスとテキストメッセ
 | `GET /auth/x/callback` | X の code / state | セッション作成、検証済みの元ページへ 303（既定 `/`）。拒否・期限切れ・state 不一致 400、外部 API 失敗 502 |
 | `GET /site/api/me` | なし | 未認証 `{user:null}`、認証済み `{user:{id,name},csrf,admin,devLogin}` |
 | `POST /site/api/logout` | CSRF | `{ok:true}`。このセッションとその視聴接続を終了 |
-| `GET /site/api/channels` | なし | `ChannelView[]`。YP 一覧と自ノードのチャンネルを統合 |
+| `GET /site/api/channels` | なし | `ChannelView[]`。YP のHTTP番組一覧に掲載されたチャンネルのみ |
 | `GET /site/api/directory` | なし | `{channels:ChannelView[],sources:YPStatus[]}`。画面が利用する一覧・取得状態 |
 | `GET /site/api/channels/{id}/comments` | 任意の `thread`（数値 ID） | `{supported,threadId,threadTitle,commentCount,threads,comments}`。認証済み掲示板閲覧 |
 | `GET /site/api/broadcast` | なし | `{streamKey,rtmpUrl,channel:ChannelView|null}`。本人のキーのみ |
@@ -126,7 +126,7 @@ JSON の成功応答、失敗時は HTTP ステータスとテキストメッセ
 | `DELETE /site/api/broadcast` | CSRF | `{ok:true}`。本人の枠だけ停止。枠なしでも成功 |
 | `GET /site/stream/{id}` | 32 hex のチャンネル ID | 認証付き HTTP ストリーム。任意クエリは 400、一覧外 / 接続不可 404、視聴枠 / サイト中継数の上限 429、中継生成失敗 503 |
 
-`ChannelView` は `{id,name,genre,description,comment?,uptime?,contactUrl,contentType,bitrate?,receiving,listeners,yellowPage?,playable?}`。ID は小文字 hex。配信キー・ソース URL・接続先 IP を含めない。リレー・配信待機中のチャンネルも一覧対象。`yellowPage` は取得元の名前、`playable:false` はサイトが接続できる tracker がないことを表す（再生形式の対応判定とは別）。視聴者数の `-1` は非表示 / 不明。任意 `tip` 指定や汎用リレー生成 API はない。
+`ChannelView` は `{id,name,genre,description,comment?,uptime?,contactUrl,contentType,bitrate?,receiving,listeners,yellowPage?,playable?}`。ID は小文字 hex。配信キー・ソース URL・接続先 IP を含めない。自ノードに存在するだけのリレー・配信枠は一覧対象外。`yellowPage` は取得元の名前、`playable:false` はサイトが接続できる tracker がないことを表す（再生形式の対応判定とは別）。視聴者数の `-1` は非表示 / 不明。任意 `tip` 指定や汎用リレー生成 API はない。
 
 ### YP の番組一覧
 
@@ -146,7 +146,7 @@ channels_url = "http://bayonet.ddo.jp/sp/index.txt"
 
 `channels_url` は管理者が管理する HTTP(S) の index.txt URL（userinfo / fragment 不可）。未設定の YP には HTTP 要求を送らない。`-yp` の選択にかかわらず設定された全一覧を取得する。ブラウザーの認証情報やプロキシ環境変数を取得通信に渡さない。管理 JSON-RPC `updateYPChannels` と共通の 60 秒キャッシュを使用する。取得全体は 5 秒以内、同時 HTTP 取得は最大 4。詳細な解析・サイズ上限は [JSON-RPC 仕様](api/jsonrpc.md#updateypchannels) を参照。
 
-サイト一覧は YP 設定順・掲載順。同じ ID は最初の YP を採用し、ゼロ ID の告知行は除外する。自ノードに同じ ID がある場合は受信状態を反映し、取得済みのローカル情報を優先する。リレー接続直後で CHAN_INFO 未取得の場合は YP の名前・形式を保持する。自ノードだけにあるチャンネルは末尾に追加する。
+サイト一覧は YP 設定順・掲載順。同じ ID は最初の YP を採用し、ゼロ ID の告知行は除外する。自ノードに同じ ID がある場合は受信状態を反映し、取得済みのローカル情報を優先する。リレー接続直後で CHAN_INFO 未取得の場合は YP の名前・形式を保持する。自ノードだけにあるチャンネルは追加しない。取得先未設定・取得結果が空の場合もローカル一覧へフォールバックしない。本人の配信ページと管理パネルでは引き続きローカルの配信枠を確認できる。
 
 `YPStatus` は `{name,configured,error?,stale,updatedAt?}`。`updatedAt` は最終成功の RFC3339 時刻。初回失敗はその YP の番組なし、再取得失敗は最終成功から 5 分未満の一覧だけを保持して `stale:true` を返し、以後は除外する。他の YP と自ノードは表示を継続する。YP 別の取得失敗・URL 未設定・古い一覧の診断情報は閲覧画面には表示しない（API の `sources` には保持する）。「一覧を更新」でも 60 秒以内はキャッシュを利用する。
 

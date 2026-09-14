@@ -163,3 +163,52 @@ func TestSiteRelayChannelCap(t *testing.T) {
 		t.Fatal("relay cap bypassed")
 	}
 }
+
+func TestDirectoryExcludesUnlistedLocalBroadcast(t *testing.T) {
+	s := testSite(t)
+	ss := addSession(s, "alice", "1")
+	if err := s.mgr.IssueStreamKey(account(ss), "ab1234"); err != nil {
+		t.Fatal(err)
+	}
+	ch, err := s.mgr.Broadcast("ab1234", channel.ChannelInfo{Name: "Unlisted", Genre: "game"}, channel.TrackInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.Write([]byte("media"), 0, 0)
+	check := func(want int) {
+		t.Helper()
+		for _, endpoint := range []string{"/site/api/channels", "/site/api/directory"} {
+			w := call(s, "GET", endpoint, "alice", "", "")
+			var rows []channelView
+			if endpoint == "/site/api/directory" {
+				var result struct{ Channels []channelView }
+				if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				rows = result.Channels
+			} else if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != 200 || len(rows) != want {
+				t.Fatal(endpoint, w.Code, w.Body.String())
+			}
+		}
+	}
+	check(0) // No directory configured: never fall back to local channels.
+	body := ""
+	yp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
+	defer yp.Close()
+	refresh := func() { s.SetCatalog(catalog.New([]config.YP{{Name: "0yp", ChannelsURL: yp.URL}})) }
+	refresh()
+	check(0) // Successful but empty directory.
+	body = "Listed<>" + view(ch).ID + "<>8.8.8.8:7154<><>game<>description<>1<>0<>100<>FLV\n"
+	refresh()
+	check(1)
+	body = ""
+	refresh()
+	check(0) // Delisting must hide even a still-receiving local broadcast.
+	w := call(s, "GET", "/site/api/broadcast", "alice", "", "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Unlisted") {
+		t.Fatal("owner lost broadcast", w.Body.String())
+	}
+}
