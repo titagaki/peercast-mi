@@ -48,3 +48,9 @@ Dockerの `npm ci` は既存と同数のaudit指摘9件を出した。依存バ�
 認証は既存の `internal/rtmp/server.go` の `OnPublish` が `Manager.IsIssuedKey` で検証し、未発行のキーを拒否する。Go実装の変更はない。本番への適用・実OBS接続は未実施。
 
 変更後の検証: `go test ./internal/rtmp -run '^TestOnPublish_'`、ダミー値によるComposeの `config -q`、両リポジトリの `git diff --check` が成功。Caddy・Ansibleの実装変更はなく、本番操作は行っていない。
+
+## 本番RTMPポートの確定
+
+ユーザー指定により本番は標準の1935/TCPを使う。上記1945での準備履歴に対して、Composeを `1935:1935`、本番TOMLを `rtmp_port = 1935`、OBSの案内URLを `rtmp://yayaue.me/live` に更新した。手元の開発用 `config.toml` は1945を維持する。本番への適用・待受確認は未実施。
+
+1935への変更はダミー値のCompose `config -q` と両リポジトリの差分チェックで検証済み。Go実装の変更はなく、Goテスト・実OBS接続は今回追加実行していない。
