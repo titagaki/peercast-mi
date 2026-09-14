@@ -74,7 +74,7 @@ origin = "http://localhost:5173"
 rtmp_url = "rtmp://localhost:1945/live"
 
 # Xログインした利用者のうちサイト管理を許可する数値ID。既定は誰も許可しない。
-# admin_x_ids = []
+# admin_x_ids = ["121039382"]
 # 公開パスの接頭辞。既定は空。本番 /mi はUIビルド設定と合わせる。
 # base_path = ""
 # UIファイルの配置先。相対パスはプロセスの作業ディレクトリ基準。
