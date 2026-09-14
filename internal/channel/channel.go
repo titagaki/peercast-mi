@@ -3,8 +3,10 @@ package channel
 import (
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/titagaki/peercast-mi/internal/pcputil"
 	"github.com/titagaki/peercast-pcp/pcp"
 )
 
@@ -76,9 +78,13 @@ type ConnectionInfo struct {
 
 // Channel is the central data structure for an active broadcast.
 type Channel struct {
-	ID        pcp.GnuID
-	buffer    *ContentBuffer
-	startTime time.Time
+	Network      *pcputil.NetworkState // immutable pointer, shared by the node
+	lastReceived atomic.Int64
+	upstreamBcst func(*pcp.Atom)
+	slotCheck    func() (bool, bool)
+	ID           pcp.GnuID
+	buffer       *ContentBuffer
+	startTime    time.Time
 
 	mu             sync.RWMutex
 	broadcastID    pcp.GnuID
@@ -244,11 +250,49 @@ func (c *Channel) SetHeader(data []byte, pos uint32) {
 // Write appends a data packet to the buffer.
 func (c *Channel) Write(data []byte, pos uint32, contFlags byte) {
 	c.buffer.Write(data, pos, contFlags)
+	c.lastReceived.Store(time.Now().UnixNano())
+}
+
+// IsReceiving reflects recent media input, not the presence of old buffered data.
+func (c *Channel) IsReceiving() bool {
+	t := c.lastReceived.Load()
+	return t != 0 && time.Since(time.Unix(0, t)) < 30*time.Second
+}
+
+func (c *Channel) SourceDisconnected() { c.lastReceived.Store(0) }
+
+// SetUpstreamBcst installs the current connection's nonblocking send queue.
+func (c *Channel) SetUpstreamBcst(send func(*pcp.Atom)) {
+	c.mu.Lock()
+	c.upstreamBcst = send
+	c.mu.Unlock()
+}
+
+// SlotStatus includes global limits when this channel belongs to a Manager.
+func (c *Channel) SlotStatus(maxRelays, maxListeners int) (bool, bool) {
+	c.mu.RLock()
+	check := c.slotCheck
+	c.mu.RUnlock()
+	if check != nil {
+		r, d := check()
+		return r || c.IsRelayFull(maxRelays), d || c.IsDirectFull(maxListeners)
+	}
+	return c.IsRelayFull(maxRelays), c.IsDirectFull(maxListeners)
 }
 
 // HasData reports whether the buffer contains at least one packet.
 func (c *Channel) HasData() bool {
 	return c.buffer.HasData()
+}
+
+// CanStartContent permits complete audio frames when the FLV header has no video.
+// Fragmented audio still has to wait for the first fragment.
+func (c *Channel) CanStartContent(p Content) bool {
+	if p.ContFlags == 0 {
+		return true
+	}
+	h, _ := c.Header()
+	return p.ContFlags == 4 && len(h) >= 5 && string(h[:3]) == "FLV" && h[4]&1 == 0
 }
 
 // Header returns the current stream header and its position.
@@ -327,11 +371,18 @@ func (c *Channel) TryAddOutput(o OutputStream, maxRelays, maxListeners int) bool
 // evicted node's IP is banned for relayBanDuration.
 // PeerCastStation 互換: firewalled なノードを切断して枠を空ける。
 func (c *Channel) MakeRelayable(maxRelays int) bool {
-	if maxRelays <= 0 {
+	return c.makeRelayable(maxRelays, false)
+}
+
+// EvictRelay attempts an eviction for a global admission limit.
+func (c *Channel) EvictRelay() bool { return c.makeRelayable(0, true) }
+
+func (c *Channel) makeRelayable(maxRelays int, force bool) bool {
+	if maxRelays <= 0 && !force {
 		return true
 	}
 	c.mu.RLock()
-	if c.numRelays < maxRelays {
+	if c.numRelays < maxRelays && !force {
 		c.mu.RUnlock()
 		return true
 	}
@@ -342,7 +393,20 @@ func (c *Channel) MakeRelayable(maxRelays int) bool {
 		if o.Type() != OutputStreamPCP {
 			continue
 		}
-		if ev, ok := o.(RelayEvictable); ok && ev.IsFirewalled() {
+		if ev, ok := o.(RelayEvictable); ok {
+			if addr, _, err := net.SplitHostPort(o.RemoteAddr()); err == nil {
+				ip := net.ParseIP(addr)
+				if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+					continue
+				}
+			}
+			unproductive := false
+			if peer, ok := o.(BcstForwarder); ok {
+				unproductive = c.relayUnproductive(peer.PeerID())
+			}
+			if !ev.IsFirewalled() && !unproductive {
+				continue
+			}
 			victim, evictable = o, ev
 			break
 		}
@@ -355,6 +419,7 @@ func (c *Channel) MakeRelayable(maxRelays int) bool {
 		c.Ban(ip, time.Now().Add(relayBanDuration))
 	}
 	evictable.Evict()
+	c.RemoveOutput(victim)
 	return true
 }
 
@@ -467,6 +532,7 @@ func (c *Channel) TotalRelays() int {
 
 // CloseAll closes all registered output streams.
 func (c *Channel) CloseAll() {
+	c.SourceDisconnected()
 	c.mu.Lock()
 	outputs := append([]OutputStream(nil), c.outputs...)
 	c.outputs = nil
@@ -502,13 +568,25 @@ func (c *Channel) SelectSourceHosts(max int, requester pcp.GnuID, requesterIP ui
 // Broadcast forwards a bcst atom to all PCP output streams except the sender
 // and any other connections from the same peer (same session ID).
 func (c *Channel) Broadcast(from OutputStream, atom *pcp.Atom) {
+	group := byte(0)
+	if g := atom.FindChild(pcp.PCPBcstGroup); g != nil {
+		group, _ = g.GetByte()
+	}
 	var fromPeerID pcp.GnuID
 	if bf, ok := from.(BcstForwarder); ok {
 		fromPeerID = bf.PeerID()
 	}
 	c.mu.RLock()
 	outputs := append([]OutputStream(nil), c.outputs...)
+	upstream := c.upstreamBcst
 	c.mu.RUnlock()
+	// nil sender identifies traffic received from our upstream.
+	if from != nil && upstream != nil && group&(pcp.PCPBcstGroupTrackers|pcp.PCPBcstGroupRelays) != 0 {
+		upstream(atom)
+	}
+	if group&pcp.PCPBcstGroupRelays == 0 {
+		return
+	}
 	for _, o := range outputs {
 		if o == from || o.Type() != OutputStreamPCP {
 			continue
@@ -517,7 +595,7 @@ func (c *Channel) Broadcast(from OutputStream, atom *pcp.Atom) {
 		if !ok {
 			continue
 		}
-		if bf.PeerID() == fromPeerID {
+		if !fromPeerID.IsEmpty() && bf.PeerID() == fromPeerID {
 			continue // 同一ピアの別接続には転送しない（ループ防止）
 		}
 		bf.SendBcst(atom)

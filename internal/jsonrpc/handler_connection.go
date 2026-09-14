@@ -25,7 +25,7 @@ func (s *Server) getChannelConnections(ch *channel.Channel) (interface{}, *rpcEr
 		sourceAddr = upstream
 	}
 	sourceStatus := "Idle"
-	if ch.HasData() {
+	if ch.IsReceiving() {
 		sourceStatus = "Receiving"
 	}
 	result := []connEntry{

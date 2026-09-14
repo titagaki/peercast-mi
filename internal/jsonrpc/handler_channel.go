@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/titagaki/peercast-pcp/pcp"
 
 	"github.com/titagaki/peercast-mi/internal/channel"
 )
@@ -104,7 +105,8 @@ func (s *Server) buildStatus(ch *channel.Channel) chanStatusResult {
 			source = fmt.Sprintf("rtmp://127.0.0.1:%d/live/%s", s.cfg.RTMPPort, key)
 		}
 	}
-	receiving := ch.HasData()
+	receiving := ch.IsReceiving()
+	relayFull, directFull := ch.SlotStatus(s.cfg.MaxRelays, s.cfg.MaxListeners)
 	status := "Idle"
 	if receiving {
 		status = "Receiving"
@@ -118,8 +120,8 @@ func (s *Server) buildStatus(ch *channel.Channel) chanStatusResult {
 		TotalRelays:    ch.TotalRelays(),
 		TotalDirects:   ch.TotalListeners(),
 		IsBroadcasting: ch.IsBroadcasting(),
-		IsRelayFull:    ch.IsRelayFull(s.cfg.MaxRelays),
-		IsDirectFull:   ch.IsDirectFull(s.cfg.MaxListeners),
+		IsRelayFull:    relayFull,
+		IsDirectFull:   directFull,
 		IsReceiving:    receiving,
 	}
 }
@@ -321,7 +323,17 @@ func (s *Server) bumpChannelWithParams(params json.RawMessage) (interface{}, *rp
 	return s.bumpChannel(ch)
 }
 
-func (s *Server) bumpChannel(_ *channel.Channel) (interface{}, *rpcError) {
+func (s *Server) bumpChannel(ch *channel.Channel) (interface{}, *rpcError) {
+	if !ch.IsBroadcasting() {
+		mgr, ok := s.mgr.(interface{ Reconnect(pcp.GnuID) error })
+		if !ok {
+			return nil, &rpcError{Code: errCodeInternal, Message: "relay reconnect unavailable"}
+		}
+		if err := mgr.Reconnect(ch.ID); err != nil {
+			return nil, &rpcError{Code: errCodeInternal, Message: err.Error()}
+		}
+		return nil, nil
+	}
 	if s.ypClient != nil {
 		s.ypClient.Bump()
 	}

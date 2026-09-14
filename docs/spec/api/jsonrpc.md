@@ -291,7 +291,7 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 
 | フィールド | 説明 |
 |---|---|
-| `status` | `"Receiving"` (データ受信中) または `"Idle"` (未受信)。`Channel.HasData()` に基づく |
+| `status` | `"Receiving"` または `"Idle"`。`Channel.IsReceiving()` に基づく |
 | `source` | ブロードキャストチャンネル: `rtmp://127.0.0.1:<rtmpPort>/live/<streamKey>`。リレーチャンネル: 上流ノードの `host:port` |
 | `uptime` | チャンネル開始からの経過秒数（`Channel.UptimeSeconds()`） |
 | `localRelays` | 自ノードの PCP リレー接続数（`Channel.NumRelays()`） |
@@ -299,9 +299,9 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 | `totalRelays` | `localRelays` + 下流ノードが BCST HOST で報告したリレー数の合計（`Channel.TotalRelays()`） |
 | `totalDirects` | `localDirects` + 下流ノードが BCST HOST で報告した視聴者数の合計（`Channel.TotalListeners()`） |
 | `isBroadcasting` | ブロードキャストチャンネル (RTMP ソース) なら `true`、リレーチャンネルなら `false` |
-| `isRelayFull` | リレー接続が上限に達していれば `true`（`Channel.IsRelayFull()`）。上限未設定時は常に `false` |
-| `isDirectFull` | 直接視聴接続が上限に達していれば `true`（`Channel.IsDirectFull()`）。上限未設定時は常に `false` |
-| `isReceiving` | ストリームデータを受信済みなら `true`（`Channel.HasData()`） |
+| `isRelayFull` | チャンネル別リレー数・全体リレー数・全体送信帯域のいずれかが上限なら `true` |
+| `isDirectFull` | チャンネル別視聴数または全体送信帯域が上限なら `true` |
+| `isReceiving` | 最後の data 受信から 30 秒未満なら `true`。ソース切断・チャンネル停止で即 false。残存バッファとは独立 |
 
 ---
 
@@ -343,7 +343,9 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 ```
 
 どちらの形式でも同じチャンネルが対象となり、処理内容は同一。
-YP への bcst を即時送信する（`YPClient.Bump()`）。送信対象は指定チャンネルに限らず、ブロードキャスト中の全チャンネル。YP 未設定の場合は no-op。
+リレーチャンネルの場合、対象の上流接続試行を中断して再選択・再接続を要求する。チャンネルと下流接続は維持する。`null` は要求受理を意味し、再接続の成立までは待たない。再接続可能なソースがなければ `-32603` を返す。
+
+ブロードキャストチャンネルの場合は YP への bcst を即時送信する (`YPClient.Bump()`)。送信対象はブロードキャスト中の全チャンネル。YP 未設定の場合は no-op。外部エンコーダーの RTMP 接続は再起動しない。
 
 **返却値:** `null`
 
@@ -395,7 +397,7 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。送信対象は指
 |---|---|
 | `connectionId` | 接続 ID。ソースは常に `-1`、出力接続は `Listener` が採番した正の整数 |
 | `type` | `"source"` / `"relay"` / `"direct"` |
-| `status` | ソースは `"Receiving"` または `"Idle"`（`HasData()` に基づく）、出力接続は `"Connected"`（固定値） |
+| `status` | ソースは `"Receiving"` または `"Idle"`（`IsReceiving()` に基づく）、出力接続は `"Connected"`（固定値） |
 | `sendRate` | bytes/sec（`OutputStream.SendRate()`）。ソースは常に `0` |
 | `recvRate` | bytes/sec。現実装では常に `0` |
 | `protocolName` | ブロードキャストチャンネルのソースは `"RTMP"`、リレーチャンネルのソースは `"PCP"`、下流 PCP リレーは `"PCP"`、HTTP 直接は `"HTTP"` |
@@ -443,8 +445,11 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。送信対象は指
 
 自ノードのリレーツリーを返す。
 
-- **ブロードキャストチャンネル:** 自ノードのみの単一要素配列。`isTracker: true`。`children` は常に空配列（YP 経由のノード情報収集は未実装）。
-- **リレーチャンネル:** 上流ノードをルートとし、その `children` として自ノードを含む 2 段ツリーを返す。
+- **ブロードキャストチャンネル:** 自ノードをルートとする単一要素配列。`isTracker: true`。
+- **リレーチャンネル:** 接続先があれば上流ノードをルート、その子に自ノードを置く。
+- 自ノード以下は直下の実接続と 180 秒以内の HOST 報告 (最大 32 件) を使い、`upip/uppt` と global/local endpoint の一致で子孫を構築する。親不明・循環は自ノード配下に救済し、同一 SID を重複させない。
+- HOST があるノードの人数・Receiving・空き枠・firewall・バージョンは報告値。未報告の直下ノードは handshake 情報を使い、未知の値はゼロ/false。上流は接続先と SID、受信状態を表示し、未取得の属性はゼロ/false。
+- 自ノードの IP・firewall は共有疎通状態 (リレーは接続先 family、配信は IPv4)、人数は実接続、空き枠は全体制限込み。未確認のポートは firewalled と表示する。
 
 **返却値（ブロードキャストチャンネルの場合）:**
 ```json
@@ -506,5 +511,5 @@ YP への bcst を即時送信する（`YPClient.Bump()`）。送信対象は指
 - `channelId` の照合は大文字・小文字を区別しない。
 - `getChannelStatus.status` は `"Receiving"` (データ受信中) または `"Idle"` (未受信)。
 - `getChannelConnections` の `recvRate` は常に `0`（受信レートの計測は未実装）。
-- `getChannelRelayTree` の `address` は空文字列（グローバル IP 未取得）。
-- リレーチャンネルに対する `bumpChannel` も `null` を返して成功するが、リレーチャンネルは YP に bcst しないので、送られるのはブロードキャストチャンネルの分だけ。
+- `getChannelRelayTree` の自ノード `address` は当該 family のグローバル IP 未取得時のみ空文字列。
+- BroadcastID は `broadcast_id` に永続化され、同じ配信パラメータ・StreamKey なら再起動後も ChannelID を維持する。導入前のランダム ID は復元できない。

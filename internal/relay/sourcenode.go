@@ -1,10 +1,12 @@
 package relay
 
 import (
-	"fmt"
+	"net"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/titagaki/peercast-mi/internal/pcputil"
 	"github.com/titagaki/peercast-pcp/pcp"
 )
 
@@ -70,7 +72,7 @@ func (l *SourceNodeList) List() []SourceNode {
 // A HOST atom contains two consecutive IP/port pairs: rhost[0] is the
 // external (global) address, rhost[1] is the internal (local) address.
 func parseSourceNode(atom *pcp.Atom) (SourceNode, bool) {
-	var ips [2]uint32
+	var ips [2]net.IP
 	var ports [2]uint16
 	ipIdx, portIdx := 0, 0
 
@@ -84,7 +86,7 @@ func parseSourceNode(atom *pcp.Atom) (SourceNode, bool) {
 			}
 		case pcp.PCPHostIP:
 			if ipIdx < 2 {
-				if v, err := child.GetInt(); err == nil {
+				if v := pcputil.AtomIP(child); v != nil {
 					ips[ipIdx] = v
 					ipIdx++
 				}
@@ -116,18 +118,18 @@ func parseSourceNode(atom *pcp.Atom) (SourceNode, bool) {
 
 	// Build global address from first IP/port pair.
 	if ports[0] != 0 {
-		ip := pcp.IPv4FromUint32(ips[0])
-		if !ip.IsUnspecified() && !ip.IsLoopback() {
-			node.GlobalIP = ips[0]
-			node.GlobalAddr = fmt.Sprintf("%s:%d", ip, ports[0])
+		ip := ips[0]
+		if ip != nil && !ip.IsUnspecified() && !ip.IsLoopback() {
+			node.GlobalIP, _ = pcp.IPv4ToUint32(ip)
+			node.GlobalAddr = net.JoinHostPort(ip.String(), strconv.Itoa(int(ports[0])))
 		}
 	}
 
 	// Build local address from second IP/port pair.
 	if ports[1] != 0 {
-		ip := pcp.IPv4FromUint32(ips[1])
-		if !ip.IsUnspecified() && !ip.IsLoopback() {
-			node.LocalAddr = fmt.Sprintf("%s:%d", ip, ports[1])
+		ip := ips[1]
+		if ip != nil && !ip.IsUnspecified() && !ip.IsLoopback() {
+			node.LocalAddr = net.JoinHostPort(ip.String(), strconv.Itoa(int(ports[1])))
 		}
 	}
 

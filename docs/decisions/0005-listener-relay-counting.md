@@ -15,7 +15,7 @@ YP への bcst や下流への host アトムには `numl` (視聴者数) / `num
 ## 結果・影響
 
 - JSON-RPC の `localRelays` / `totalRelays` (`localDirects` / `totalDirects`) が PeerCastStation と同じ意味になる
-- 下流が報告をやめても切断するまで古い値が残る (PeerCastStation も同様)
+- 下流が報告をやめても切断するまで古い値が残る。2026-09-14 再検証: 以前の「PeerCastStation も同様」という説明は今回の参照版では成立しない。PCS は `Channel.HostsView` で 180 秒を超えた報告を集計から除く。mi の集計の期限・子孫の扱いは [実装比較 D06](../reviews/2026-09-14-implementation-comparison.md) を参照
 
 ## 参照
 

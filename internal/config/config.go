@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -32,7 +33,7 @@ func (y *YP) HostPort() (string, error) {
 	if port == "" {
 		port = "7144"
 	}
-	return host + ":" + port, nil
+	return net.JoinHostPort(host, port), nil
 }
 
 type Config struct {

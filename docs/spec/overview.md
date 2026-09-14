@@ -100,7 +100,8 @@ PCP ハンドシェイクの `helo.sid` および `bcst.from`、`oleh.sid` と�
 
 ### 3.2 ブロードキャスト ID (BroadcastID)
 
-配信セッションの識別子。起動ごとにランダム生成する 16 バイトの GnuID。
+配信者の識別子。config ファイルと同じディレクトリの `broadcast_id` に永続化する 16 バイトの GnuID。
+初回のみランダム生成 (先頭バイトの下位ビットをクリア) し、32 桁 hex と改行を権限 0600 で保存する。既存ファイルが不正・ゼロ ID・読み取り不可なら起動を失敗させ、再生成しない。
 `helo.bcid`、`bcst > chan.bcid` として使用する。
 
 ### 3.3 ストリームキー (StreamKey)
@@ -131,7 +132,7 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 ```
 1. 設定ファイル (config.toml) を読み込む
 2. シグナルハンドラ (SIGINT/SIGTERM) を設定
-3. SessionID / BroadcastID (ノードレベル) を生成
+3. SessionID を生成し、BroadcastID を broadcast_id から復元 (未作成なら生成・保存)
 4. ChannelManager を生成し、stream_keys.json からストリームキーを復元
    ↳ RelayClient のコンストラクタを Manager.NewRelay に注入する (channel → relay の依存を避けるため)
 5. Listener を起動 (ポート 7144 待ち受け)
@@ -154,7 +155,7 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
    ↳ streamKey パラメータからストリームキーを取得
    ↳ Channel (IsBroadcasting=true) を生成、Manager に登録、channelId を返す
 4. RTMP データが Channel.ContentBuffer に流れ始める
-5. YPClient が次の bcst サイクルで新チャンネルを YP に通知
+5. YPClient が変更検出 (1 秒周期) で新チャンネルを YP に通知
 ```
 
 > エンコーダー接続 (手順 2) と broadcastChannel 呼び出し (手順 3) は順不同。
@@ -233,7 +234,7 @@ ChannelID = peercast-yt 互換 XOR アルゴリズム
 | `RTMPServer` accept | TCP accept ループ |
 | `RTMPServer` per-conn | 接続ごと: RTMP 受信・デコード |
 | `relay.Client.Run` | リレーチャンネルごと: 上流接続・ストリーム受信ループ (再接続含む) |
-| `relay.Client.bcstHostLoop` | 上流接続ごと: BCST HOST を定期送信 (120 秒 / 接続数変化時) |
+| `relay.Client.bcstHostLoop` | 上流接続ごと: BCST HOST を定期送信 (120 秒 / 人数・Receiving・枠・疎通状態変化時) |
 | `YPClient.Run` | COUT 接続・bcst 送信ループ |
 | `YPClient.run` reader | YP からの root(update)/quit を読む |
 | `Cleaner.Run` | 5 秒ごとにアイドルなリレーチャンネルを削除 |
@@ -351,4 +352,3 @@ type outputBase struct {
 
 設計上の判断とその根拠は [docs/decisions/](../decisions/README.md) に記録する。
 この仕様書は「現在どう動くか」だけを書き、「なぜそうしたか」は decisions 側を参照すること。
-

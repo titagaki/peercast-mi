@@ -4,16 +4,21 @@ import (
 	"math/rand/v2"
 	"sort"
 	"sync"
+	"time"
 
+	"github.com/titagaki/peercast-mi/internal/pcputil"
 	"github.com/titagaki/peercast-pcp/pcp"
 )
 
 const maxKnownHosts = 32
 
+const nodeLifetime = 3 * time.Minute
+
 // nodeStats holds the listener/relay counts reported by a downstream node.
 type nodeStats struct {
 	Listeners int
 	Relays    int
+	Updated   time.Time
 }
 
 // nodeTable tracks what a channel has learned about other nodes through
@@ -28,6 +33,8 @@ type nodeTable struct {
 	// knownHosts is a bounded cache of Host atoms observed via bcst
 	// forwarding, deduped by session ID, oldest first.
 	knownHosts []*pcp.Atom
+	hostTimes  map[pcp.GnuID]time.Time
+	owners     map[pcp.GnuID]pcp.GnuID
 
 	// stats maps a downstream node's session ID to the counts it reported.
 	stats map[pcp.GnuID]nodeStats
@@ -43,6 +50,10 @@ func (n *nodeTable) addKnownHost(host *pcp.Atom) {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.hostTimes == nil {
+		n.hostTimes = make(map[pcp.GnuID]time.Time)
+	}
+	n.hostTimes[sid] = time.Now()
 	for i, h := range n.knownHosts {
 		if id, ok := hostSessionID(h); ok && id == sid {
 			n.knownHosts[i] = host
@@ -50,6 +61,9 @@ func (n *nodeTable) addKnownHost(host *pcp.Atom) {
 		}
 	}
 	if len(n.knownHosts) >= maxKnownHosts {
+		if id, ok := hostSessionID(n.knownHosts[0]); ok {
+			delete(n.hostTimes, id)
+		}
 		n.knownHosts = n.knownHosts[1:]
 	}
 	n.knownHosts = append(n.knownHosts, host)
@@ -72,6 +86,10 @@ func (n *nodeTable) selectSourceHosts(max int, requester pcp.GnuID, requesterIP 
 	}
 	cands := make([]scored, 0, len(n.knownHosts))
 	for _, h := range n.knownHosts {
+		sid, _ := hostSessionID(h)
+		if t, ok := n.hostTimes[sid]; ok && time.Since(t) > nodeLifetime {
+			continue
+		}
 		if sid, ok := hostSessionID(h); ok && sid == requester {
 			continue
 		}
@@ -112,7 +130,7 @@ func hostScore(host *pcp.Atom, requesterIP uint32) float64 {
 		case pcp.PCPHostIP:
 			if !hasIP {
 				ip, _ = c.GetInt()
-				hasIP = true
+				hasIP = pcputil.AtomIP(c) != nil
 			}
 		case pcp.PCPHostPort:
 			hasPrt = true
@@ -129,7 +147,7 @@ func hostScore(host *pcp.Atom, requesterIP uint32) float64 {
 	if hasGlobal {
 		score += 16000
 	}
-	if hasGlobal && ip == requesterIP {
+	if hasGlobal && requesterIP != 0 && ip == requesterIP {
 		score += 8000
 	}
 	if flags&pcp.PCPHostFlags1Relay != 0 {
@@ -152,7 +170,13 @@ func (n *nodeTable) updateStats(sessionID pcp.GnuID, listeners, relays int) {
 	if n.stats == nil {
 		n.stats = make(map[pcp.GnuID]nodeStats)
 	}
-	n.stats[sessionID] = nodeStats{Listeners: listeners, Relays: relays}
+	for id, s := range n.stats {
+		if time.Since(s.Updated) > nodeLifetime {
+			delete(n.stats, id)
+			delete(n.owners, id)
+		}
+	}
+	n.stats[sessionID] = nodeStats{Listeners: listeners, Relays: relays, Updated: time.Now()}
 }
 
 // removeStats forgets a downstream node's counts.
@@ -160,6 +184,29 @@ func (n *nodeTable) removeStats(sessionID pcp.GnuID) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	delete(n.stats, sessionID)
+	for id, owner := range n.owners {
+		if id == sessionID || owner == sessionID {
+			delete(n.stats, id)
+			// Keep ownership until the cached hosts below have been removed.
+		}
+	}
+	kept := n.knownHosts[:0]
+	for _, h := range n.knownHosts {
+		id, _ := hostSessionID(h)
+		if id == sessionID || n.owners[id] == sessionID {
+			delete(n.stats, id)
+			delete(n.hostTimes, id)
+			delete(n.owners, id)
+		} else {
+			kept = append(kept, h)
+		}
+	}
+	n.knownHosts = kept
+	for id, owner := range n.owners {
+		if id == sessionID || owner == sessionID {
+			delete(n.owners, id)
+		}
+	}
 }
 
 // totals returns the sum of all downstream nodes' listener and relay counts.
@@ -167,6 +214,9 @@ func (n *nodeTable) totals() (listeners, relays int) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	for _, s := range n.stats {
+		if time.Since(s.Updated) > nodeLifetime {
+			continue
+		}
 		listeners += s.Listeners
 		relays += s.Relays
 	}
@@ -179,6 +229,8 @@ func (n *nodeTable) reset() {
 	defer n.mu.Unlock()
 	n.knownHosts = nil
 	n.stats = nil
+	n.hostTimes = nil
+	n.owners = nil
 }
 
 // hostSessionID extracts the (non-zero) session ID from a Host atom.

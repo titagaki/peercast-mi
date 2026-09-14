@@ -6,8 +6,8 @@ import (
 
 // sameNAT reports whether the node is behind the same NAT as us: its
 // external IP matches our own learned global IP (ourGlobalIP, from the YP
-// oleh). Matches PeerCastStation's IsSiteLocal(Host) check
-// (PCPSourceStream.cs: compares node.GlobalEndPoint to listener.GlobalEndPoint).
+// oleh). Unlike PeerCastStation's endpoint equality, this deliberately ignores
+// ports: different nodes behind one NAT usually have different forwarded ports.
 func (n SourceNode) sameNAT(ourGlobalIP uint32) bool {
 	return ourGlobalIP != 0 && n.GlobalIP != 0 && n.GlobalIP == ourGlobalIP
 }

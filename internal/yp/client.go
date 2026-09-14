@@ -1,6 +1,7 @@
 package yp
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -19,7 +20,7 @@ const (
 	defaultPCPPort  = 7144
 	retryInitial    = 5 * time.Second
 	retryMax        = 120 * time.Second
-	defaultInterval = 120 * time.Second
+	defaultInterval = 30 * time.Second
 )
 
 // ChannelLister provides a list of active channels for YP announcement.
@@ -30,6 +31,9 @@ type ChannelLister interface {
 // Client maintains a PCP COUT connection to a YP (root server).
 // It announces all channels currently active in the manager.
 type Client struct {
+	Network      *pcputil.NetworkState
+	localAddress net.IP
+	announced    map[pcp.GnuID]announcement
 	addr         string
 	sessionID    pcp.GnuID
 	broadcastID  pcp.GnuID
@@ -56,7 +60,7 @@ func New(addr string, sessionID, broadcastID pcp.GnuID, mgr ChannelLister, liste
 	if listenPort <= 0 {
 		listenPort = defaultPCPPort
 	}
-	return &Client{
+	c := &Client{
 		addr:         addr,
 		sessionID:    sessionID,
 		broadcastID:  broadcastID,
@@ -68,6 +72,10 @@ func New(addr string, sessionID, broadcastID pcp.GnuID, mgr ChannelLister, liste
 		bumpCh:       make(chan struct{}, 1),
 		doneCh:       make(chan struct{}),
 	}
+	if m, ok := mgr.(*channel.Manager); ok {
+		c.Network = m.Network
+	}
+	return c
 }
 
 // Run connects to the YP and runs the bcst loop, reconnecting on failure.
@@ -129,7 +137,8 @@ func (c *Client) shouldConnect() bool {
 	if len(channels) == 0 {
 		return false
 	}
-	if c.globalIP == 0 {
+	ip, _, _ := c.Network.Status(c.localAddress)
+	if c.globalIP == 0 && ip == nil {
 		return true
 	}
 	for _, ch := range channels {
@@ -171,11 +180,48 @@ func (c *Client) Bump() {
 }
 
 func (c *Client) run() (connected bool, err error) {
-	conn, err := pcp.Dial(c.addr)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	established := make(chan struct{})
+	defer close(done)
+	defer cancel()
+	go func() {
+		select {
+		case <-c.stopCh:
+			select {
+			case <-established:
+				// Give the writer time to send QUIT, then unblock stalled I/O.
+				timer := time.NewTimer(time.Second)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+					cancel()
+				case <-done:
+				}
+			default:
+				cancel()
+			}
+		case <-done:
+		}
+	}()
+	raw, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", c.addr)
 	if err != nil {
 		return false, fmt.Errorf("dial: %w", err)
 	}
+	conn := &pcp.Conn{Conn: raw}
 	defer conn.Close()
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
+	conn.SetDeadline(time.Now().Add(18 * time.Second))
+	c.localAddress = pcputil.AddrIP(conn.LocalAddr())
+	if err := conn.WriteAtom(pcp.NewIntAtom(pcp.PCPConnect, pcputil.ProtocolVersion(c.localAddress))); err != nil {
+		return false, err
+	}
 
 	if tcp, ok := conn.LocalAddr().(*net.TCPAddr); ok {
 		c.localIP, _ = pcp.IPv4ToUint32(tcp.IP)
@@ -211,6 +257,9 @@ func (c *Client) run() (connected bool, err error) {
 	}
 
 handshakeDone:
+	close(established)
+	conn.SetDeadline(time.Time{})
+	c.announced = make(map[pcp.GnuID]announcement)
 	slog.Info("yp: connected", "addr", c.addr, "global_ip", ipToString(c.globalIP), "update_interval", updateInterval)
 
 	// Relay-only nodes have nothing to announce. We only connected to learn
@@ -225,6 +274,8 @@ handshakeDone:
 
 	ticker := time.NewTicker(updateInterval)
 	defer ticker.Stop()
+	changes := time.NewTicker(time.Second)
+	defer changes.Stop()
 
 	// Send initial bcst for all active channels.
 	if err := c.sendAllBcst(conn); err != nil {
@@ -235,7 +286,7 @@ handshakeDone:
 	// On a root atom with the update flag set, trigger an immediate bcst.
 	// On a quit atom or any read error, signal the main loop to exit.
 	readErrCh := make(chan error, 1)
-	immediateCh := make(chan struct{}, 1)
+	rootCh := make(chan *pcp.Atom, 16)
 	go func() {
 		for {
 			a, err := conn.ReadAtom()
@@ -245,11 +296,10 @@ handshakeDone:
 			}
 			switch a.Tag {
 			case pcp.PCPRoot:
-				if _, immediate := parseRoot(a); immediate {
-					select {
-					case immediateCh <- struct{}{}:
-					default:
-					}
+				select {
+				case rootCh <- a:
+				case <-done:
+					return
 				}
 			case pcp.PCPQuit:
 				readErrCh <- fmt.Errorf("quit from YP")
@@ -270,11 +320,24 @@ handshakeDone:
 			if err := c.sendAllBcst(conn); err != nil {
 				return true, fmt.Errorf("write bcst: %w", err)
 			}
-		case <-immediateCh:
-			if err := c.sendAllBcst(conn); err != nil {
-				return true, fmt.Errorf("write bcst (immediate): %w", err)
+		case root := <-rootCh:
+			interval, immediate := parseRoot(root)
+			if interval > 0 {
+				ticker.Reset(time.Duration(interval) * time.Second)
 			}
-			slog.Debug("yp: bcst sent (root update)", "addr", c.addr)
+			if immediate {
+				if err := c.sendAllBcst(conn); err != nil {
+					return true, err
+				}
+			}
+		case <-changes.C:
+			if err := c.sendAnnouncements(conn, false); err != nil {
+				return true, err
+			}
+			if !c.hasBroadcastingChannel() {
+				_ = conn.WriteAtom(pcp.NewIntAtom(pcp.PCPQuit, pcp.PCPErrorQuit+pcp.PCPErrorShutdown))
+				return true, nil
+			}
 		case <-c.bumpCh:
 			if err := c.sendAllBcst(conn); err != nil {
 				return true, fmt.Errorf("write bcst (bump): %w", err)
@@ -286,25 +349,12 @@ handshakeDone:
 
 // sendAllBcst sends one bcst atom per broadcasting (non-relay) channel.
 func (c *Client) sendAllBcst(conn *pcp.Conn) error {
-	channels := c.mgr.List()
-	count := 0
-	for _, ch := range channels {
-		if !ch.IsBroadcasting() {
-			continue
-		}
-		if err := conn.WriteAtom(c.buildBcst(ch)); err != nil {
-			return err
-		}
-		count++
-	}
-	if count > 0 {
-		slog.Debug("yp: bcst sent", "addr", c.addr, "channels", count)
-	}
-	return nil
+	return c.sendAnnouncements(conn, true)
 }
 
 func (c *Client) handleOleh(a *pcp.Atom) {
-	oleh, err := pcp.ParseHeloPacket(a)
+	c.Network.Observe(a)
+	oleh, err := pcputil.ParseHelo(a)
 	if err != nil {
 		return
 	}
@@ -318,18 +368,23 @@ func (c *Client) handleOleh(a *pcp.Atom) {
 }
 
 func (c *Client) buildHelo() *pcp.Atom {
+	port, ping := c.listenPort, c.listenPort
+	if c.Network != nil {
+		port, ping = c.Network.HeloPort(c.localAddress, c.listenPort)
+	}
 	h := pcp.HeloPacket{
 		Agent:     version.AgentName,
 		Version:   version.PCPVersion,
 		SessionID: c.sessionID,
-		Port:      c.listenPort,
-		Ping:      c.listenPort,
+		Port:      port,
+		Ping:      ping,
 		BCID:      c.broadcastID,
 	}
 	return h.BuildHeloAtom()
 }
 
 func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
+	relayFull, directFull := ch.SlotStatus(c.maxRelays, c.maxListeners)
 	info := ch.Info()
 	track := ch.Track()
 
@@ -343,6 +398,8 @@ func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
 	}).BuildAtom()
 
 	hp := pcputil.HostAtomParams{
+		Network:      c.Network,
+		LocalAddress: c.localAddress,
 		SessionID:    c.sessionID,
 		LocalIP:      c.localIP,
 		GlobalIP:     c.globalIP,
@@ -354,11 +411,11 @@ func (c *Client) buildBcst(ch *channel.Channel) *pcp.Atom {
 		OldPos:       ch.OldestPos(),
 		NewPos:       ch.NewestPos(),
 		IsTracker:    true,
-		IsReceiving:  ch.HasData(),
+		IsReceiving:  ch.IsReceiving(),
 		HasGlobalIP:  true,
 		TrackerAtom:  true,
-		RelayFull:    ch.IsRelayFull(c.maxRelays),
-		DirectFull:   ch.IsDirectFull(c.maxListeners),
+		RelayFull:    relayFull,
+		DirectFull:   directFull,
 	}
 	if upAddr := ch.UpstreamAddr(); upAddr != "" {
 		if upIP, upPort, err := parseHostPort(upAddr); err == nil {

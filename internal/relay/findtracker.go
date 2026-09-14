@@ -13,6 +13,7 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
+	"github.com/titagaki/peercast-mi/internal/pcputil"
 	"github.com/titagaki/peercast-mi/internal/version"
 )
 
@@ -61,7 +62,7 @@ func findTrackerAt(ctx context.Context, ypAddr string, channelID, sessionID pcp.
 	// Same request a relay would make; the helo is sent up front like
 	// Client.handshake does (peercast-yt reads it after the 503 line).
 	chanIDHex := hex.EncodeToString(channelID[:])
-	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: 1\r\n\r\n", chanIDHex, ypAddr)
+	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: %d\r\n\r\n", chanIDHex, ypAddr, pcputil.ProtocolVersion(pcputil.AddrIP(conn.RemoteAddr())))
 	if _, err := io.WriteString(conn, req); err != nil {
 		return "", fmt.Errorf("write GET: %w", err)
 	}

@@ -290,6 +290,23 @@ func TestRebuildHeader_FullHeader(t *testing.T) {
 	}
 }
 
+func TestCompatRebuildHeaderMediaFlags(t *testing.T) {
+	for _, flags := range []byte{1, 4, 5} {
+		h, _, ch := setupHandler(t)
+		if flags&1 != 0 {
+			h.avcTag = makeFLVTag(9, 0, []byte{0x17, 0x00})
+		}
+		if flags&4 != 0 {
+			h.aacTag = makeFLVTag(8, 0, []byte{0xAF, 0x00})
+		}
+		h.rebuildHeader()
+		header, _ := ch.Header()
+		if len(header) < 5 || header[4] != flags {
+			t.Fatalf("media flags: %x, want %x", header, flags)
+		}
+	}
+}
+
 func TestRebuildHeader_NoSequenceHeaders(t *testing.T) {
 	h, _, ch := setupHandler(t)
 

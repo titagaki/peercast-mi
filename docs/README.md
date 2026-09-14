@@ -5,6 +5,7 @@
 | [spec/](spec/) | **仕様**: 現在の実装がどう動くか | 動作を変えるコミットで同時に更新する |
 | [decisions/](decisions/README.md) | **設計判断の記録**: なぜそうしたか、却下した案、トレードオフ | 設計上の判断をしたとき。仕様書には書かない |
 | [reference/](reference/) | **参照資料**: PeerCast / PCP プロトコルなど外部仕様のまとめ | peercast-mi の動作ではなく、前提となる外部知識を書く |
+| [reviews/](reviews/) | **調査結果**: 実装比較、検証結果、未確認事項 | 比較元の版とコード根拠を残す。設計判断の採否は ADR に分ける |
 | [tasks.md](tasks.md) | **タスク**: 未着手・進行中・保留の作業 | 作業を思いついたら書き、終わったら完了に移す |
 
 ## spec/
@@ -25,3 +26,8 @@
 - [protocol/yp_channel_registration.md](reference/protocol/yp_channel_registration.md) — YP へのチャンネル掲載プロトコル
 
 peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp/pcp` で確認する。
+
+## reviews/
+
+- [2026-09-14-implementation-comparison.md](reviews/2026-09-14-implementation-comparison.md) — PeerCastStation・peercast-yt・peercast-mi の実装比較。意図的な差異と理由、残る差異、過去の互換性ノートの再評価、再現チェック
+- [2026-09-14-comparison-corrections.md](reviews/2026-09-14-comparison-corrections.md) — 比較後の修正状況、維持する差異の理由、回帰テスト、運用上の注意

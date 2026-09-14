@@ -223,8 +223,15 @@ func (h *handler) rebuildHeader() {
 
 	// FLV file header: "FLV" + version(1) + flags(0x05) + dataOffset(9) + backPointer(0)
 	head = append(head, []byte("FLV")...)
-	head = append(head, 0x01)       // version
-	head = append(head, 0x05)       // flags: hasVideo | hasAudio
+	head = append(head, 0x01) // version
+	flags := byte(0)
+	if h.avcTag != nil {
+		flags |= 1
+	}
+	if h.aacTag != nil {
+		flags |= 4
+	}
+	head = append(head, flags)      // describe audio-only and video-only streams accurately
 	head = append(head, 0, 0, 0, 9) // dataOffset = 9
 	head = append(head, 0, 0, 0, 0) // PreviousTagSize0 = 0
 

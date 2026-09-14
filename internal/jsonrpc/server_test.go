@@ -700,8 +700,8 @@ func TestGetChannelRelayTree(t *testing.T) {
 	if len(children) != 0 {
 		t.Fatalf("children should be empty, got %v", children)
 	}
-	if node["isFirewalled"].(bool) {
-		t.Fatal("isFirewalled should be false")
+	if !node["isFirewalled"].(bool) {
+		t.Fatal("unknown port status should be firewalled")
 	}
 	if node["isRelayFull"].(bool) {
 		t.Fatal("isRelayFull should be false")

@@ -25,5 +25,7 @@
 
 ## 参照
 
+2026-09-14 再検証: 本 ADR が対応したのは引数形式。現在の mi の `bumpChannel` は YP への再告知であり、PCS / yt の対象チャンネル再接続とは動作が異なる。この動作差の理由は本 ADR には記録していない ([実装比較 D08](../reviews/2026-09-14-implementation-comparison.md))。
+
 - `internal/jsonrpc/handler_channel.go`
 - [spec/api/jsonrpc.md](../spec/api/jsonrpc.md) `bumpChannel`

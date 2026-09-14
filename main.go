@@ -43,11 +43,17 @@ func main() {
 	defer stop()
 
 	sessionID := id.NewRandom()
-	broadcastID := id.NewRandom()
+	broadcastID, err := id.LoadOrCreateBroadcastID(filepath.Join(filepath.Dir(*configPath), "broadcast_id"))
+	if err != nil {
+		slog.Error("broadcast ID: load failed", "err", err)
+		os.Exit(1)
+	}
 
 	slog.Info("startup", "session_id", sessionID, "broadcast_id", broadcastID)
 
 	mgr := channel.NewManager(broadcastID)
+	mgr.MaxRelays, mgr.MaxListeners = cfg.MaxRelays, cfg.MaxListeners
+	mgr.MaxRelaysTotal, mgr.MaxUpstreamKbps = cfg.MaxRelaysTotal, cfg.MaxUpstreamKbps
 	mgr.ContentBufferSeconds = cfg.ContentBufferSeconds
 	cachePath := filepath.Join(filepath.Dir(*configPath), "stream_keys.json")
 	mgr.SetCachePath(cachePath)

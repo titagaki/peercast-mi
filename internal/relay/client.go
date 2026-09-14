@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,11 +49,19 @@ const (
 // Client connects to an upstream PeerCast node and writes the received stream
 // into a local channel, reconnecting on failure.
 type Client struct {
-	trackerAddr string
-	channelID   pcp.GnuID
-	sessionID   pcp.GnuID
-	listenPort  uint16
-	ch          *channel.Channel
+	localAddress     net.IP // set before the per-connection sender starts
+	upstreamAddress  net.IP
+	writeMu          sync.Mutex
+	connectionMu     sync.Mutex
+	connectionCancel context.CancelFunc
+	bumpPending      bool
+	// HandshakeTimeout bounds the complete HTTP/PCP exchange after dialing.
+	HandshakeTimeout time.Duration
+	trackerAddr      string
+	channelID        pcp.GnuID
+	sessionID        pcp.GnuID
+	listenPort       uint16
+	ch               *channel.Channel
 
 	sourceNodes  *SourceNodeList
 	ignoredNodes *IgnoredNodeCollection
@@ -85,16 +94,17 @@ func (c *Client) SetGlobalIP(ip uint32) {
 func New(trackerAddr string, channelID, sessionID pcp.GnuID, listenPort uint16, ch *channel.Channel) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
-		trackerAddr:  trackerAddr,
-		channelID:    channelID,
-		sessionID:    sessionID,
-		listenPort:   listenPort,
-		ch:           ch,
-		sourceNodes:  NewSourceNodeList(),
-		ignoredNodes: NewIgnoredNodeCollection(),
-		ctx:          ctx,
-		cancel:       cancel,
-		doneCh:       make(chan struct{}),
+		trackerAddr:      trackerAddr,
+		channelID:        channelID,
+		sessionID:        sessionID,
+		listenPort:       listenPort,
+		ch:               ch,
+		sourceNodes:      NewSourceNodeList(),
+		ignoredNodes:     NewIgnoredNodeCollection(),
+		ctx:              ctx,
+		cancel:           cancel,
+		doneCh:           make(chan struct{}),
+		HandshakeTimeout: 18 * time.Second,
 	}
 }
 
@@ -141,6 +151,16 @@ func (c *Client) Run() {
 		}
 
 		reason, err := c.connectTo(targetAddr)
+		c.connectionMu.Lock()
+		bumped := c.bumpPending
+		c.bumpPending = false
+		c.connectionMu.Unlock()
+		if bumped {
+			if targetAddr != c.trackerAddr {
+				c.ignoredNodes.Add(targetAddr)
+			}
+			continue
+		}
 		if err != nil {
 			if reason == stopReasonUnavailable {
 				slog.Warn("relay: connection error", "addr", targetAddr, "err", err)
@@ -181,7 +201,15 @@ func (c *Client) Stop() {
 }
 
 func (c *Client) connectTo(addr string) (stopReason, error) {
-	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(c.ctx, "tcp", addr)
+	ctx, cancel := context.WithCancel(c.ctx)
+	c.connectionMu.Lock()
+	c.connectionCancel = cancel
+	if c.bumpPending {
+		cancel()
+	}
+	c.connectionMu.Unlock()
+	defer func() { cancel(); c.connectionMu.Lock(); c.connectionCancel = nil; c.connectionMu.Unlock() }()
+	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return stopReasonError, fmt.Errorf("dial: %w", err)
 	}
@@ -193,7 +221,7 @@ func (c *Client) connectTo(addr string) (stopReason, error) {
 	defer close(connDone)
 	go func() {
 		select {
-		case <-c.ctx.Done():
+		case <-ctx.Done():
 			conn.Close()
 		case <-connDone:
 		}
@@ -211,17 +239,30 @@ func (c *Client) connectTo(addr string) (stopReason, error) {
 	// Send periodic BCST HOST atoms upstream so intermediate nodes can
 	// populate their relay tree with peercast-mi's version info.
 	localIP := connLocalIP(conn)
+	c.localAddress = pcputil.AddrIP(conn.LocalAddr())
+	c.upstreamAddress = pcputil.AddrIP(conn.RemoteAddr())
 	bcstStop := make(chan struct{})
-	go c.bcstHostLoop(conn, localIP, bcstStop)
-	defer close(bcstStop)
+	bcstDone := make(chan struct{})
+	queue := make(chan *pcp.Atom, 32)
+	c.ch.SetUpstreamBcst(func(a *pcp.Atom) {
+		select {
+		case queue <- a:
+		default:
+			cancel()
+		}
+	})
+	go func() { defer close(bcstDone); c.bcstHostLoopWithQueue(conn, localIP, bcstStop, queue) }()
+	defer func() { c.ch.SetUpstreamBcst(nil); close(bcstStop); <-bcstDone; c.ch.SourceDisconnected() }()
 
 	reason, err = c.processBody(conn, br)
 
 	// Send PCP_QUIT on disconnect (best-effort, 3-second timeout).
 	quitAtom := pcp.NewIntAtom(pcp.PCPQuit, pcp.PCPErrorQuit+pcp.PCPErrorShutdown)
+	c.writeMu.Lock()
 	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 	quitAtom.Write(conn)
 	conn.SetWriteDeadline(time.Time{})
+	c.writeMu.Unlock()
 
 	return reason, err
 }
@@ -229,13 +270,20 @@ func (c *Client) connectTo(addr string) (stopReason, error) {
 // handshake performs the PCP relay handshake over an established connection:
 // sends the HTTP GET + helo atom, reads the HTTP response + oleh atom.
 func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, stopReason, error) {
+	timeout := c.HandshakeTimeout
+	if timeout <= 0 {
+		timeout = 18 * time.Second
+	}
+	conn.SetDeadline(time.Now().Add(timeout))
+	defer conn.SetDeadline(time.Time{})
 	chanIDHex := hex.EncodeToString(c.channelID[:])
 
 	// 1. Send HTTP GET /channel/<id> with PCP upgrade header.
 	// x-peercast-pos tells the upstream where to resume from, matching
 	// PeerCastStation which sends Channel.ContentPosition on reconnect.
 	contentPos := c.ch.ContentPosition()
-	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: 1\r\nx-peercast-pos: %d\r\n\r\n", chanIDHex, addr, contentPos)
+	protocol := pcputil.ProtocolVersion(pcputil.AddrIP(conn.RemoteAddr()))
+	req := fmt.Sprintf("GET /channel/%s HTTP/1.0\r\nHost: %s\r\nx-peercast-pcp: %d\r\nx-peercast-pos: %d\r\n\r\n", chanIDHex, addr, protocol, contentPos)
 	if _, err := io.WriteString(conn, req); err != nil {
 		return 0, nil, stopReasonError, fmt.Errorf("write GET: %w", err)
 	}
@@ -243,11 +291,16 @@ func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, stop
 	// 2. Send helo atom.
 	// Note: the pcp\n PCP_CONNECT magic is sent only for direct TCP connections
 	// (not HTTP-upgraded /channel/ requests), so it is intentionally omitted here.
+	port, ping := c.listenPort, uint16(0)
+	if c.ch.Network != nil {
+		port, ping = c.ch.Network.HeloPort(pcputil.AddrIP(conn.LocalAddr()), c.listenPort)
+	}
 	helo := (&pcp.HeloPacket{
 		Agent:     version.AgentName,
 		SessionID: c.sessionID,
 		Version:   version.PCPVersion,
-		Port:      c.listenPort,
+		Port:      port,
+		Ping:      ping,
 	}).BuildHeloAtom()
 	if err := helo.Write(conn); err != nil {
 		return 0, nil, stopReasonError, fmt.Errorf("write helo: %w", err)
@@ -284,11 +337,21 @@ func (c *Client) handshake(conn net.Conn, addr string) (int, *bufio.Reader, stop
 	// Record upstream node info for the HOST atom handed to downstream on
 	// shutdown. Only for an accepted (200) relay: a 503 host is not our
 	// upstream and must not be advertised as one.
+	olehPkt, parseErr := pcputil.ParseHelo(oleh)
+	if parseErr != nil {
+		return 0, nil, stopReasonError, parseErr
+	}
+	if c.ch.Network != nil {
+		c.ch.Network.Observe(oleh)
+	}
+	if olehPkt.RemoteIP != 0 {
+		c.SetGlobalIP(olehPkt.RemoteIP)
+	}
 	if statusCode == 200 {
-		olehPkt, _ := pcp.ParseHeloPacket(oleh)
 		if tcp, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
 			upIP, _ := pcp.IPv4ToUint32(tcp.IP)
 			c.ch.SetUpstreamNodeInfo(olehPkt.SessionID, upIP, uint16(tcp.Port))
+			c.ch.SetUpstreamAddr(tcp.String())
 		}
 	}
 
@@ -398,6 +461,13 @@ func (c *Client) handleChan(atom *pcp.Atom) {
 // handleBcst processes a PCP_BCST atom by extracting child atoms
 // (PCP_HOST, PCP_CHAN, etc.) and processing them locally.
 func (c *Client) handleBcst(atom *pcp.Atom) {
+	local, forwarded := pcputil.RouteBcst(atom, c.sessionID, c.channelID)
+	if forwarded != nil {
+		c.ch.Broadcast(nil, forwarded)
+	}
+	if !local {
+		return
+	}
 	for _, child := range atom.Children() {
 		switch child.Tag {
 		case pcp.PCPHost:
@@ -428,9 +498,17 @@ func (c *Client) handlePkt(p *pcp.ChanPktData) {
 // when the local listener/relay count changes, matching PeerCastStation's
 // CheckHostInfoUpdate logic.
 func (c *Client) bcstHostLoop(conn net.Conn, localIP uint32, stop <-chan struct{}) {
+	c.bcstHostLoopWithQueue(conn, localIP, stop, nil)
+}
+
+func (c *Client) bcstHostLoopWithQueue(conn net.Conn, localIP uint32, stop <-chan struct{}, queue <-chan *pcp.Atom) {
 	uphostIP, uphostPort := connRemoteIPPort(conn)
-	lastListeners := c.ch.NumListeners()
-	lastRelays := c.ch.NumRelays()
+	snapshot := func() string {
+		r, d := c.ch.SlotStatus(0, 0)
+		ip, known, open := c.ch.Network.Status(c.localAddress)
+		return fmt.Sprint(c.ch.NumListeners(), "/", c.ch.NumRelays(), "/", c.ch.IsReceiving(), "/", r, "/", d, "/", ip, "/", known, "/", open)
+	}
+	lastState := snapshot()
 	c.writeBcstHost(conn, localIP, uphostIP, uphostPort)
 
 	t := time.NewTicker(bcstInterval)
@@ -443,14 +521,23 @@ func (c *Client) bcstHostLoop(conn net.Conn, localIP uint32, stop <-chan struct{
 		select {
 		case <-stop:
 			return
+		case a := <-queue:
+			c.writeMu.Lock()
+			conn.SetWriteDeadline(time.Now().Add(bcstWriteTimeout))
+			err := a.Write(conn)
+			conn.SetWriteDeadline(time.Time{})
+			c.writeMu.Unlock()
+			if err != nil {
+				conn.Close()
+				return
+			}
 		case <-t.C:
-			lastListeners = c.ch.NumListeners()
-			lastRelays = c.ch.NumRelays()
+			lastState = snapshot()
 			c.writeBcstHost(conn, localIP, uphostIP, uphostPort)
 		case <-statCheck.C:
-			l, r := c.ch.NumListeners(), c.ch.NumRelays()
-			if l != lastListeners || r != lastRelays {
-				lastListeners, lastRelays = l, r
+			state := snapshot()
+			if state != lastState {
+				lastState = state
 				c.writeBcstHost(conn, localIP, uphostIP, uphostPort)
 				t.Reset(bcstInterval)
 			}
@@ -459,30 +546,40 @@ func (c *Client) bcstHostLoop(conn net.Conn, localIP uint32, stop <-chan struct{
 }
 
 func (c *Client) writeBcstHost(conn net.Conn, localIP, uphostIP uint32, uphostPort uint16) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	atom := c.buildRelayBcstAtom(localIP, uphostIP, uphostPort)
 	conn.SetWriteDeadline(time.Now().Add(bcstWriteTimeout))
-	atom.Write(conn)
+	if err := atom.Write(conn); err != nil {
+		conn.Close()
+	}
 	conn.SetWriteDeadline(time.Time{})
 }
 
 func (c *Client) buildRelayBcstAtom(localIP, uphostIP uint32, uphostPort uint16) *pcp.Atom {
+	relayFull, directFull := c.ch.SlotStatus(0, 0)
 	globalIP := c.globalIP.Load()
 	hostAtom := pcputil.BuildHostAtom(pcputil.HostAtomParams{
-		SessionID:    c.sessionID,
-		LocalIP:      localIP,
-		GlobalIP:     globalIP,
-		ListenPort:   c.listenPort,
-		ChannelID:    c.channelID,
-		NumListeners: c.ch.NumListeners(),
-		NumRelays:    c.ch.NumRelays(),
-		Uptime:       c.ch.UptimeSeconds(),
-		OldPos:       c.ch.OldestPos(),
-		NewPos:       c.ch.NewestPos(),
-		IsReceiving:  c.ch.HasData(),
-		HasGlobalIP:  globalIP != 0,
-		UphostIP:     uphostIP,
-		UphostPort:   uphostPort,
-		UphostHops:   1,
+		Network:         c.ch.Network,
+		LocalAddress:    c.localAddress,
+		UpstreamAddress: c.upstreamAddress,
+		SessionID:       c.sessionID,
+		LocalIP:         localIP,
+		GlobalIP:        globalIP,
+		ListenPort:      c.listenPort,
+		ChannelID:       c.channelID,
+		NumListeners:    c.ch.NumListeners(),
+		NumRelays:       c.ch.NumRelays(),
+		Uptime:          c.ch.UptimeSeconds(),
+		OldPos:          c.ch.OldestPos(),
+		NewPos:          c.ch.NewestPos(),
+		IsReceiving:     c.ch.IsReceiving(),
+		RelayFull:       relayFull,
+		DirectFull:      directFull,
+		HasGlobalIP:     globalIP != 0,
+		UphostIP:        uphostIP,
+		UphostPort:      uphostPort,
+		UphostHops:      1,
 	})
 	return pcp.NewParentAtom(pcp.PCPBcst,
 		pcp.NewByteAtom(pcp.PCPBcstTTL, 11),

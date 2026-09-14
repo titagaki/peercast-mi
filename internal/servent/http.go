@@ -185,7 +185,7 @@ func (o *HTTPOutputStream) run() {
 		}
 
 		for _, pkt := range packets {
-			if waitingForKeyframe && pkt.ContFlags != 0 {
+			if waitingForKeyframe && !o.ch.CanStartContent(pkt) {
 				sent = pkt
 				continue
 			}

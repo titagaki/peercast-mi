@@ -123,7 +123,10 @@ func (l *Listener) handle(conn net.Conn) {
 
 	// Peek enough bytes to identify the protocol and extract a 32-hex channel ID.
 	// "GET /channel/<32-hex>" = 13 + 32 = 45 chars; 64 bytes is sufficient.
-	peek, err := br.Peek(64)
+	peek, err := br.Peek(4)
+	if err == nil && !bytes.Equal(peek, []byte("pcp\n")) {
+		peek, err = br.Peek(64)
+	}
 	if err != nil && len(peek) < 4 {
 		conn.Close()
 		return
@@ -167,7 +170,7 @@ func (l *Listener) handlePCPRelay(cc *countingConn, br *bufio.Reader, peek []byt
 		return
 	}
 	// PeerCastStation 互換: チャンネルがデータ受信中でなければ 404 を返す。
-	if !ch.HasData() {
+	if !ch.IsReceiving() {
 		slog.Info("pcp: channel not receiving", "remote", cc.RemoteAddr(), "id", hex.EncodeToString(channelID[:]))
 		io.WriteString(cc, statusNotFound)
 		cc.Close()
@@ -411,15 +414,14 @@ func (l *Listener) handleHTTPStream(cc *countingConn, br *bufio.Reader) {
 func (l *Listener) canAdmitRelay(ch *channel.Channel, remote net.Addr) bool {
 	l.admitMu.Lock()
 	defer l.admitMu.Unlock()
-	if l.maxRelaysTotal > 0 && l.mgr.TotalRelays() >= l.maxRelaysTotal {
-		return false
-	}
-	if l.isUpstreamFull() {
-		return false
-	}
 	if tcp, ok := remote.(*net.TCPAddr); ok && ch.HasBanned(tcp.IP.String()) {
 		slog.Info("pcp: rejected (banned)", "remote", remote)
 		return false
+	}
+	for (l.maxRelaysTotal > 0 && l.mgr.TotalRelays() >= l.maxRelaysTotal) || l.isUpstreamFull() {
+		if !ch.EvictRelay() {
+			return false
+		}
 	}
 	// Try to evict a firewalled relay if per-channel limit is reached.
 	if !ch.MakeRelayable(l.maxRelays) {

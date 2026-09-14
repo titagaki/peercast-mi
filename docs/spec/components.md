@@ -101,7 +101,7 @@ ContFlags は PeerCastStation 互換のビットフラグ:
 - `0x02`: 映像非キーフレーム (InterFrame)
 - `0x04`: 音声パケット (AudioFrame)
 
-キーフレーム (`ContFlags == 0x00`) を起点に新規視聴者へのストリーム配信を開始する。
+キーフレーム (`ContFlags == 0x00`) を起点に新規視聴者へのストリーム配信を開始する。音声のみ FLV では完全な AudioFrame (`0x04`) も開始点になる。
 
 ---
 
@@ -288,9 +288,13 @@ type nodeTable struct {
 
 `ContentBuffer` は private フィールド `buffer` として保持する。外部からは `Channel` の委譲メソッド (`HasData`, `Header`, `Signal`, `Since`, `OldestPos`, `NewestPos`, `Write`, `SetHeader`) 経由でアクセスする。
 
-`Broadcast` メソッドは `OutputStream` を `BcstForwarder` に型アサーションし、bcst アトム転送を行う。`BcstForwarder` を実装しない HTTPOutputStream はスキップされる。同一ピア（同じ `PeerID()`）の別接続にも転送しない（ループ防止）。
+`Broadcast` は group の TRACKERS/RELAYS に従い下流由来の BCST を上流へ、RELAYS に従い他の PCP 出力へ転送する。上流由来は上流へ戻さない。HTTP 出力と送信元と同じ `PeerID()` の接続は除く。上流送信は接続単位のキュー (32 件) と直列 writer を使い、満杯ならその上流接続を中断する。
 
-`MakeRelayable` は `OutputStream` を `RelayEvictable` (`IsFirewalled()` / `Evict()`) に型アサーションし、firewalled な PCP 出力ストリームを 1 つ `Evict()` する。退出させたノードの IP は `relayBanDuration` (90 秒) の間 `HasBanned` が true になる。
+HOST 候補 (最大 32 件) と下流統計は最終報告から 180 秒で対象外になる。下流 HOST に直下の受信元 SID を記録し、その接続の切断時は子孫の報告も除去する。`IsReceiving()` は最後の data 受信から 30 秒未満のとき true。ソース切断・チャンネル停止時は即座に false になり、残存バッファの有無とは独立する。
+
+`SlotStatus` はチャンネル別上限、Manager の全体リレー数・全体送信帯域上限を合成する。YP・上流向け HOST・下流向け HOST・API がこの判定を共有する。
+
+`MakeRelayable` は非 local の PCP 出力で、firewalled または新鮮な HOST が relay full かつ下流リレー数 0 を示すものを 1 つ退出させる。private・loopback・link-local は退出対象外。退出時は出力一覧から即除去し、接続元 IP を 90 秒 BAN する。全体上限の場合も対象チャンネルの `EvictRelay` で退出を試す。
 
 `SelectSourceHosts` は `knownHosts` から requester の session ID を持つものを除き、次のスコアの降順に並べて最大 `max` 件を返す (`nodeTable.selectSourceHosts`)。Host アトムの最初の ip/port ペアを global endpoint、`flg1` の Relay ビットが落ちていれば relay full、`uphp` を hops として読む。
 
@@ -330,7 +334,7 @@ func (c *Channel) NewestPos() uint32
 // OutputStream 管理
 func (c *Channel) AddOutput(o OutputStream)
 func (c *Channel) TryAddOutput(o OutputStream, maxRelays, maxListeners int) bool
-func (c *Channel) MakeRelayable(maxRelays int) bool // firewalled な下流を 1 つ Evict() して枠を空け、その IP を 90 秒 BAN する
+func (c *Channel) MakeRelayable(maxRelays int) bool // 非 local の退出候補を 1 つ Evict() して枠を空け、その IP を 90 秒 BAN する
 func (c *Channel) Ban(key string, until time.Time)   // key (リモート IP) を until まで BAN
 func (c *Channel) HasBanned(key string) bool         // BAN 中か (期限切れは削除して false)
 func (c *Channel) RemoveOutput(o OutputStream)
@@ -397,20 +401,20 @@ Run():
 
 connectTo():
   1. DialContext で TCP 接続 (10 秒タイムアウト、Stop で中断可能)
-  2. handshake()
+  2. handshake() (GET/helo/HTTP 応答/oleh 全体の期限 18 秒)
   3. HTTP 503 なら processHosts() で HOST / quit だけ受け取って戻る
   4. HTTP 200 なら bcstHostLoop goroutine を起動し processBody() で受信
   5. 切断時に quit(QUIT+SHUTDOWN) を best-effort で送信
 
 handshake():
   1. HTTP GET /channel/<channelIdHex> HTTP/1.0 を送信
-       x-peercast-pcp: 1
+       x-peercast-pcp: 1 (IPv4) / 100 (IPv6)
        x-peercast-pos: Channel.ContentPosition()   (途中から再開)
   2. helo アトム送信
        agnt = "PeerCast-MI/<version>"
        sid  = SessionID
        ver  = 1218
-       port = listenPort
+       port = listenPort (疎通確認済みの場合)。未確認なら ping = listenPort、閉鎖確認済みなら両方なし
      ※ pcp\n magic は HTTP-upgraded /channel/ リクエストでは送信しない
   3. HTTP ステータス行 + ヘッダーを読む (200 / 503 以外はエラー)
   4. oleh アトム受信 (quit なら終了理由に変換)
@@ -427,13 +431,15 @@ processBody():
      - 60 秒無音 → 読み取りタイムアウトでエラー終了
 
 bcstHostLoop():
-     - 接続直後、120 秒ごと、および視聴者数/リレー数が変化した時 (5 秒ごとに確認) に
+     - 接続直後、120 秒ごと、および人数/Receiving/空き枠/疎通状態が変化した時 (5 秒ごとに確認) に
        BCST(grp=TRACKERS) > HOST を上流に送る
 ```
 
 ### 再接続
 
 バックオフはなく、上記のとおり候補ホストへ即時に接続し直す (PeerCastStation 互換。詳細は [decisions/peercaststation-compat.md](../decisions/peercaststation-compat.md))。`Stop()` が呼ばれると context をキャンセルし、接続中の Dial / 読み取りを中断して Run() を終了させる。
+
+`Reconnect()` は現在の接続試行だけを中断し、非 tracker の接続先を ignore に入れて再選択する。チャンネルと下流接続は維持する。
 
 ホスト切り替えの間は Channel オブジェクトが維持されるため、下流の PCP リレー接続・HTTP 視聴接続は継続する。ただし、ヘッダーが再送されるまでの間は下流ノードは待機状態になる。Run() が終了 (候補枯渇・tracker 停止) した場合は全出力を閉じ、`onStopped` 経由で Manager から削除される。
 
@@ -457,15 +463,15 @@ YP (root server) に PCP コントロール接続 (COUT) を確立し、チャ�
 
 ```
 1. TCP 接続 (YP のホスト:ポート)
-2. "pcp\n" アトム + バージョン送信  ← pcp.Dial が自動処理
+2. "pcp\n" INT アトム送信 (IPv4 は 1、IPv6 は 100)。Dial は 10 秒、handshake は 18 秒の期限
 3. helo 送信
      agnt = "PeerCast-MI/<version>"
      ver  = 1218
      sid  = SessionID
-     port = listenPort (peercast_port)
-     ping = listenPort (YP からのファイアウォール疎通確認を受ける)
+     port = listenPort (疎通確認済みの場合)
+     ping = listenPort (未確認の場合。閉鎖確認済みなら port/ping ともなし)
      bcid = BroadcastID
-4. oleh 受信 → rip から globalIP を取得し OnGlobalIP を呼ぶ
+4. oleh 受信 → rip と port を IP family 別の共有 NetworkState に反映。IPv4 は OnGlobalIP も呼ぶ
 5. root アトム受信 (任意)
      root.uint: 更新間隔 (秒)。受信した値で updateInterval を上書き
      root.upd : 即時更新要求
@@ -473,8 +479,11 @@ YP (root server) に PCP コントロール接続 (COUT) を確立し、チャ�
 7. ブロードキャスト中のチャンネルが 1 つもなければ quit(QUIT+SHUTDOWN) を送って切断
    (リレー専用ノードは globalIP を知るためだけに接続する)
 8. 初回 bcst 送信 (ブロードキャストチャンネルごとに 1 つ)
-9. updateInterval ごとに bcst を繰り返し送信
+9. updateInterval ごとに bcst を繰り返し送信 (既定 30 秒)
    - YP からの root(upd) 受信時、および bumpChannel (Bump()) 時は即時送信
+   - 接続後の root.uint 変更もタイマーに反映
+   - 1 秒周期でメタデータ・人数・Receiving・空き枠・疎通状態の変更を検出して通知
+   - 配信削除時は最後の HOST を RECV=false で通知。配信がなくなれば QUIT を送って切断
    - YP からの quit 受信・読み取りエラーで切断 → 再接続
 10. 停止時: quit(QUIT+SHUTDOWN) 送信
 ```
@@ -513,7 +522,7 @@ bcst
   host  (pcputil.BuildHostAtom で構築)
     id   = SessionID
     ip   = globalIP  (oleh.rip から取得)   ← 1 組目 (global)
-    port = listenPort
+    port = listenPort (疎通未確認・閉鎖の場合は 0)
     ip   = localIP   (YP 接続のローカル側) ← 2 組目 (LAN)
     port = listenPort
     numl = Channel.TotalListeners()
@@ -523,9 +532,10 @@ bcst
     newp = Channel.NewestPos()
     cid  = ChannelID
     flg1 = TRACKER | CIN
-           | RECV   (Channel.HasData() のとき)
-           | RELAY  (IsRelayFull(max_relays) でないとき)
-           | DIRECT (IsDirectFull(max_listeners) でないとき)
+           | RECV   (Channel.IsReceiving() のとき)
+           | RELAY  (SlotStatus の relayFull が false)
+           | DIRECT (global IP が既知かつ SlotStatus の directFull が false)
+           | PUSH   (疎通未確認または閉鎖)
     ver  = 1218
     vevp = 27
     vexp = "MI"
@@ -604,7 +614,7 @@ bcst
 2. `max_upstream_kbps` (全チャンネル合計の送信レート)
 3. per-channel: `Channel.TryAddOutput(o, max_relays, max_listeners)`
 
-PCP リレーは handshake 前に `canAdmitRelay` で判定して HTTP 200/503 を決め、handshake 後にもう一度 `tryAdmit` で確定する。`canAdmitRelay` は 1, 2 の後、接続元 IP が `Channel.HasBanned` なら拒否し、そうでなければ `Channel.MakeRelayable` で firewalled な下流の退出を試みる (退出させた下流の IP は 90 秒 BAN される)。
+PCP リレーは handshake 前に `canAdmitRelay` で HTTP 200/503 を決め、handshake 後に `tryAdmit` で確定する。`canAdmitRelay` は BAN を先に確認し、全体上限時は対象チャンネルの退出候補を除去して再判定する。その後チャンネル別上限に対して `MakeRelayable` を試す。
 
 ---
 
@@ -618,7 +628,7 @@ PCP リレーは handshake 前に `canAdmitRelay` で判定して HTTP 200/503 �
 
 ```
 Listener.handlePCPRelay():
-  1. チャンネル未登録、またはデータ未受信 (HasData() == false) → HTTP 404 で切断
+  1. チャンネル未登録、または受信中でない (IsReceiving() == false) → HTTP 404 で切断
   2. canAdmitRelay() で受け入れ可否を先に判定 (HTTP 200 / 503 の決定に使う)
   3. handshake(admitted)
   4. 拒否 (503) の場合: sendRelayDenied() → 切断
@@ -668,10 +678,10 @@ streamLoop():
   2. sendDataPackets() — Channel.Since(pos) で未送信パケットを送信
      - 送信直前に headerCh を非ブロッキングで確認し、ヘッダー変更があれば先に送って位置を取り直す
        (SetHeader + Write の競合で新ストリームのデータを旧ヘッダーの後ろに流さない)
-     - 最古の未送信パケットが 5 秒以上前のものなら Overflow とみなし quit(QUIT+SKIP) で切断
+     - 未送信パケットの待機時間が 5 秒を超えたら Overflow として quit(QUIT+SKIP)。初期バックログは受信時刻ではなく出力接続時刻から計測
      - 15KB を超えるパケットは分割し、2 個目以降に Fragment (0x01) フラグを OR する
-  3. 送信待ちがなければ Signal() / 通知チャネル / stallTimer を select
-     - 5 秒以上データが来ない場合 → 接続を切断 (quit なし)
+  3. 送信待ちがなければ Signal() / 通知チャネルを select
+     - data が追加されないことだけを理由には切断しない
      - infoCh 通知時: chan > info を送信 (ブロードキャストチャンネルなら bcst でラップ)
      - trackCh 通知時: chan > trck を送信 (同上)
      - headerCh 通知時: chan > pkt(type=head) を送信し、送信位置を新ヘッダー位置に戻してキーフレーム待ちにする
@@ -691,7 +701,7 @@ streamLoop():
 - `reqPos` が `ContentPosition()` (最新パケット末尾) より後 (別の位置空間から再接続してきた等): `ContentPosition()`。バックログは送らず以降のデータだけ送る
 - それ以外: `reqPos`
 
-いずれの場合も最初のキーフレーム (`ContFlags == 0`) まではスキップする。
+いずれの場合も最初の開始可能パケットまではスキップする。`ContFlags == 0`、または FLV ヘッダーの video bit がない音声のみの配信の完全な AudioFrame (`ContFlags == 4`) が開始可能。Fragment は開始点にしない。HTTP 視聴でも同じ規則を使う。RTMP の FLV ヘッダーは受信済みの AVC/AAC sequence header に従い media bit を設定する。
 
 ### data パケットの形式
 
@@ -709,12 +719,14 @@ chan
 
 受信した `bcst` を転送する際のルール:
 
-- `ttl` が 0 なら転送しない
+- 転送には有効な ttl/hops/grp/from が必要。`ttl <= 1` または `hops == 255` なら転送しない
 - 転送時に `ttl -= 1`、`hops += 1`
 - `from` が自分の SessionID なら転送しない (ループ防止)
-- `dest` が自分の SessionID なら転送しない (宛先が自分)
-- 転送先は同一チャンネルの他の PCP 出力ストリーム。送信元と同じ `PeerID()` を持つ接続は除く
-- bcst 内に `host` があれば `Channel.AddKnownHost` (代替候補) と `UpdateNodeStats` (下流の視聴者/リレー数) に反映
+- `dest` が自分なら TTL にかかわらずローカル処理し、転送しない。他ノード宛の payload はローカル処理しない
+- 別 channel の cid は破棄。転送先は group に従う上流と PCP 出力 (前述の Broadcast)
+- 下流由来のローカル処理対象 HOST は `ObserveHost` で候補・統計・直下受信元を記録する。上流由来の HOST は上流候補として扱う
+
+IP アトムは IPv4 の 4 bytes と IPv6 の逆順 16 bytes を扱う。HOST の global/local/upstream、oleh.rip、候補の host:port、YP URL は IPv6 を受理する。疎通状態は family ごとに共有し、未確認・閉鎖なら HOST の global port を 0、PUSH を true とする。GIV 接続は提供しない。
 
 ---
 
@@ -752,10 +764,10 @@ chan
 6. Channel.Header() を送信
    (待機中に届いた headerCh の通知はこの送信で消化済みなので捨てる。捨てないとヘッダーが 2 回送られる)
 
-7. キーフレームを起点にストリームデータを連続送信
+7. 開始可能パケットを起点にストリームデータを連続送信
    - Channel.PacketsAfter(sent) で最後に送った Content より新しいものだけを取る
-   - ContFlags != 0 のパケット (= 非キーフレーム) をスキップ
-   - キーフレーム以降は全パケットを順次送信
+   - Channel.CanStartContent が false のパケットを開始点までスキップ
+   - 開始点以降は全パケットを順次送信
    - 書き込みタイムアウト: 60 秒 (パケットごとに更新)
    - Channel.Signal() でデータ到着を待機
    - headerCh 通知時: 新ヘッダーを書き込み、sent と keyframe 待ち状態をリセットして継続

@@ -24,9 +24,8 @@ type fakeYP struct {
 
 // acceptMagicAndHelo reads the magic bytes (from pcp.NewConn) and the helo atom.
 func newFakeYP(conn net.Conn) (*fakeYP, error) {
-	// pcp.NewConn writes 8-byte magic; read it manually.
-	magic := make([]byte, 8)
-	if _, err := conn.Read(magic); err != nil {
+	// Read an atom, including its protocol version payload when present.
+	if _, err := pcp.ReadAtom(conn); err != nil {
 		return nil, err
 	}
 
@@ -98,8 +97,7 @@ func dialPipe(t *testing.T) (*pcp.Conn, net.Conn) {
 		close(done)
 	}()
 	// Server needs to be ready to receive magic bytes.
-	magic := make([]byte, 8)
-	if _, err := serverRaw.Read(magic); err != nil {
+	if _, err := pcp.ReadAtom(serverRaw); err != nil {
 		t.Fatal(err)
 	}
 	<-done
@@ -172,8 +170,11 @@ func TestBuildHelo(t *testing.T) {
 		t.Error("session ID mismatch")
 	}
 
-	// Check port
-	portAtom := helo.FindChild(pcp.PCPHeloPort)
+	// Unknown reachability requests a probe, not an unverified open port.
+	if helo.FindChild(pcp.PCPHeloPort) != nil {
+		t.Fatal("unknown reachability must not advertise port")
+	}
+	portAtom := helo.FindChild(pcp.PCPHeloPing)
 	if portAtom == nil {
 		t.Fatal("missing port")
 	}
@@ -201,6 +202,9 @@ func TestBuildBcst(t *testing.T) {
 	mgr := channel.NewManager(bcid)
 	c := New("localhost:7144", sid, bcid, mgr, 7144, 0, 0)
 	c.globalIP = 0xC0A80001 // 192.168.0.1
+	c.Network.Observe(pcp.NewParentAtom(pcp.PCPOleh,
+		pcp.NewIntAtom(pcp.PCPHeloRemoteIP, c.globalIP),
+		pcp.NewShortAtom(pcp.PCPHeloPort, 7144)))
 
 	const key = "sk_testkey"
 	mgr.IssueStreamKey("test-account", key)
@@ -642,9 +646,7 @@ func TestRun_FullIntegration(t *testing.T) {
 		}
 		defer conn.Close()
 
-		// Read PCP magic (8 bytes).
-		magic := make([]byte, 8)
-		if _, err := conn.Read(magic); err != nil {
+		if _, err := pcp.ReadAtom(conn); err != nil {
 			return
 		}
 
@@ -767,8 +769,7 @@ func TestRun_BackoffResetsOnSuccess(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		magic := make([]byte, 8)
-		conn.Read(magic)
+		pcp.ReadAtom(conn) // PCP connect atom
 		pcp.ReadAtom(conn) // helo
 		oleh := pcp.NewParentAtom(pcp.PCPOleh,
 			pcp.NewIntAtom(pcp.PCPHeloRemoteIP, 0x7F000001),
@@ -834,8 +835,7 @@ func TestRun_NoChannels(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		magic := make([]byte, 8)
-		conn.Read(magic)
+		pcp.ReadAtom(conn) // PCP connect atom
 		pcp.ReadAtom(conn) // helo
 		oleh := pcp.NewParentAtom(pcp.PCPOleh,
 			pcp.NewIntAtom(pcp.PCPHeloRemoteIP, 0x7F000001),
@@ -905,8 +905,7 @@ func TestRun_BumpSendsBcst(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		magic := make([]byte, 8)
-		conn.Read(magic)
+		pcp.ReadAtom(conn) // PCP connect atom
 		pcp.ReadAtom(conn)
 		oleh := pcp.NewParentAtom(pcp.PCPOleh,
 			pcp.NewIntAtom(pcp.PCPHeloRemoteIP, 0x7F000001),
@@ -980,8 +979,7 @@ func TestRun_HandshakeQuit(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		magic := make([]byte, 8)
-		conn.Read(magic)
+		pcp.ReadAtom(conn) // PCP connect atom
 		pcp.ReadAtom(conn) // helo
 		// Send quit instead of oleh + ok.
 		pcp.NewIntAtom(pcp.PCPQuit, pcp.PCPErrorQuit).Write(conn)
@@ -1051,8 +1049,7 @@ func TestRun_RootInterval(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		magic := make([]byte, 8)
-		conn.Read(magic)
+		pcp.ReadAtom(conn) // PCP connect atom
 		pcp.ReadAtom(conn) // helo
 
 		// Send oleh + root with custom interval + ok.

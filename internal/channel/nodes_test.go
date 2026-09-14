@@ -161,7 +161,7 @@ func (f *fakeRelayOutput) Evict()             { f.evicted = true }
 func TestChannel_MakeRelayable_EvictsAndBans(t *testing.T) {
 	ch := New(pcp.GnuID{1}, pcp.GnuID{}, 0)
 	open := &fakeRelayOutput{fakeOutput: fakeOutput{typ: OutputStreamPCP}, addr: "10.0.0.1:7144"}
-	fw := &fakeRelayOutput{fakeOutput: fakeOutput{typ: OutputStreamPCP}, addr: "10.0.0.2:51000", firewalled: true}
+	fw := &fakeRelayOutput{fakeOutput: fakeOutput{typ: OutputStreamPCP}, addr: "203.0.113.2:51000", firewalled: true}
 	ch.AddOutput(open)
 	ch.AddOutput(fw)
 
@@ -184,7 +184,7 @@ func TestChannel_MakeRelayable_EvictsAndBans(t *testing.T) {
 	if open.evicted {
 		t.Fatal("node with an open port must not be evicted")
 	}
-	if !ch.HasBanned("10.0.0.2") {
+	if !ch.HasBanned("203.0.113.2") {
 		t.Fatal("evicted node's IP must be banned")
 	}
 	if ch.HasBanned("10.0.0.1") {

@@ -9,6 +9,8 @@
 
 ### 互換性・検証
 
+- [ ] PCS/yt/mi を配信元・中継・下流として入れ替え、3 段以上の BCST、満杯時退出、bump、長いバックログ、音声のみ FLV、YP 配信停止を実機相互接続で検証する — [修正記録](reviews/2026-09-14-comparison-corrections.md)。Go 回帰テストと静的比較は実施済み
+- [ ] IPv6 の多段 PCP/YP・dual stack・疎通確認を PCS/yt と実機検証する — [ADR 0018](decisions/0018-comparison-corrections.md)。ワイヤー形式・候補抽出の単体テストと IPv4 loopback の ping は実施済み
 - [ ] peercast-yt から移行したとき同じ ChannelID を保つ必要があるかを判断する。必要なら StreamKey の連結をやめる (または StreamKey が空なら連結しない) 設計変更を ADR に記録する — [decisions/0001](decisions/0001-channel-id-algorithm.md) 検証済み: アルゴリズム自体は peercast-yt と一致するが入力が異なる。PeerCastStation は別方式 (SHA512+MD5) なので一致しない
 
 ### 機能
@@ -28,6 +30,8 @@
 - [ ] Web UI (`ui/`) を LAN 上の別ホストから使う場合の `allowed_origins` 設定を UI 側のセットアップ手順に書く — [decisions/0011](decisions/0011-cors-policy.md)。UI の配布方法が決まってから
 
 ## 完了
+
+- [x] 2026-09-14 3 実装の比較と理由のない差異の修正 — [修正・検証結果](reviews/2026-09-14-comparison-corrections.md)、[ADR 0018](decisions/0018-comparison-corrections.md)。実機相互接続は未着手欄に分離
 
 - [x] 2026-09-14 `Channel.StartTime` を unexport (外部参照なし、`UptimeSeconds()` のみ)
 - [x] 2026-09-14 relay の 503 時ログを整理 — 「connected」「connection error」ではなく「upstream full, collecting alternative hosts」「host full, trying next」を Info で出す。`QUIT+UNAVAILABLE` はエラー扱いしない

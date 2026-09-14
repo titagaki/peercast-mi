@@ -10,6 +10,7 @@ import (
 	"github.com/titagaki/peercast-pcp/pcp"
 
 	"github.com/titagaki/peercast-mi/internal/id"
+	"github.com/titagaki/peercast-mi/internal/pcputil"
 )
 
 // RelayHandle is implemented by relay.Client. Using an interface here avoids
@@ -41,8 +42,11 @@ type RelayFactory func(ch *Channel, upstreamAddr string) RelayHandle
 //	Stop(channelID) → channel removed, streamKey still valid
 //	RevokeStreamKey(accountName) → key invalidated, active channels NOT stopped
 type Manager struct {
-	broadcastID pcp.GnuID
-	keys        *StreamKeyStore
+	Network *pcputil.NetworkState
+	// Limits are configured before channels are started.
+	MaxRelays, MaxListeners, MaxRelaysTotal, MaxUpstreamKbps int
+	broadcastID                                              pcp.GnuID
+	keys                                                     *StreamKeyStore
 
 	// ContentBufferSeconds is the duration (in seconds) the ring buffer
 	// should cover for new channels. Packet count is computed from bitrate.
@@ -69,6 +73,7 @@ type Manager struct {
 // used as the seed for deterministic channel ID generation.
 func NewManager(broadcastID pcp.GnuID) *Manager {
 	return &Manager{
+		Network:       &pcputil.NetworkState{},
 		broadcastID:   broadcastID,
 		keys:          NewStreamKeyStore(),
 		byID:          make(map[pcp.GnuID]*Channel),
@@ -121,6 +126,7 @@ func (m *Manager) Broadcast(streamKey string, info ChannelInfo, track TrackInfo)
 	channelID := channelIDForBroadcast(m.broadcastID, streamKey, info.Name, info.Genre, info.Bitrate)
 	bufSize := ContentBufferSizeForBitrate(info.Bitrate, m.ContentBufferSeconds)
 	ch := New(channelID, m.broadcastID, bufSize)
+	m.configureChannel(ch)
 	// Set fields directly: ch is not yet visible to other goroutines.
 	ch.isBroadcasting = true
 	ch.info = info
@@ -220,6 +226,7 @@ func (m *Manager) StartRelay(channelID pcp.GnuID, upstreamAddr string) (*Channel
 		return nil, ErrRelayChannelLimit
 	}
 	ch := New(channelID, pcp.GnuID{}, 0)
+	m.configureChannel(ch)
 	// Set fields directly: ch is not yet visible to other goroutines.
 	ch.source = upstreamAddr
 	ch.upstreamAddr = upstreamAddr
