@@ -33,6 +33,8 @@ peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp
 
 ## reviews/
 
+- [2026-09-14-config-inventory.md](reviews/2026-09-14-config-inventory.md) — 全設定項目の用途・既定値とBasic/X管理認証の整理
+
 - [2026-09-14-yp-publication-genre.md](reviews/2026-09-14-yp-publication-genre.md) — BCST送信と0ypのジャンル接頭辞による掲載条件
 
 - [2026-09-14-mobile-stream-keys.md](reviews/2026-09-14-mobile-stream-keys.md) — スマホ向け短い配信キーとRTMP試行制限の検証

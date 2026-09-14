@@ -1,5 +1,12 @@
+# ローカル開発用。本番は yayaue.me/docker/peercast-mi/config.toml をAnsibleで配置する。
+# 設定一覧と認証入口の違い: docs/reviews/2026-09-14-config-inventory.md
+# ポートの既定値はRTMP 1935、PCP 7144。以下はローカル用に変更している。
 rtmp_port     = 1945
 peercast_port = 7154
+
+# NAT/Docker環境でHOSTに通知する公開IPv4。省略時はOLEHから自動取得する。
+# 自分の公開IPv4を指定する。本番VPSの値をローカルで有効にしない。
+# public_ipv4 = "153.127.50.98"
 
 # ログレベル: "debug" | "info" | "warn" | "error"  (デフォルト: "info")
 log_level = "debug"
@@ -24,9 +31,20 @@ channel_cleanup_minutes = 20
 # ビットレートから必要なパケット数を自動計算する
 # content_buffer_seconds = 8
 
-# 非 localhost からの JSON-RPC アクセスに使う Basic 認証の資格情報
-admin_user = "admin"
-admin_pass = "hogehoge"
+# ノードへ直接 /pls/ /stream/ で未登録チャンネルの中継を要求できる送信元。
+# "private" が既定。"any" なら外部も許可。サイト視聴者のX認証とは別。
+# relay_request_from = "private"
+# ノード全体の中継チャンネル数上限。0（既定）は無制限。
+# max_relay_channels = 0
+
+# PCPポートの /api/1 へ直接接続する際のBasic認証（サイトのX管理認証とは別）。
+# loopback接続は資格情報不要。どちらか未設定なら非loopbackからは拒否する。
+# 外部から直接管理するときだけ両方設定する。
+# admin_user = "admin"
+# admin_pass = "replace-with-a-strong-password"
+# 直接管理APIの追加CORS許可元。認証を省略する設定ではない。
+# loopbackのHTTP(S)オリジンは既定で許可される。
+# allowed_origins = []
 
 # 複数の YP を定義しておき、起動時に -yp <name> で選択する。
 # デフォルト（-yp 省略時）は最初のエントリが使われる。
@@ -47,8 +65,25 @@ addr = "pcp://root.p-at.net/"
 channels_url = "https://p-at.net/index.txt"
 
 [site]
+# サイト機能の既定は無効。ここではローカル開発用に有効化している。
 enabled = true
+# 開発ログインは既定false。trueはHTTP loopback専用で、管理権限は付かない。
 dev_login = true
 listen = "127.0.0.1:8080"
 origin = "http://localhost:5173"
 rtmp_url = "rtmp://localhost:1945/live"
+
+# Xログインした利用者のうちサイト管理を許可する数値ID。既定は誰も許可しない。
+# admin_x_ids = []
+# 公開パスの接頭辞。既定は空。本番 /mi はUIビルド設定と合わせる。
+# base_path = ""
+# UIファイルの配置先。相対パスはプロセスの作業ディレクトリ基準。
+# ui_dir = "ui/dist"
+# サイトの視聴接続上限。省略/0で以下の既定値を使う（0は無制限ではない）。
+# max_viewers = 20
+# max_viewers_per_user = 2
+# サイト経由で新規中継を開始する際の上限。省略/0で8。
+# トップレベルのmax_relay_channelsと両方が適用される。
+# max_relay_channels = 8
+# X認証の資格情報は環境変数 PEERCAST_X_CLIENT_ID / PEERCAST_X_CLIENT_SECRET。
+# dev_login=falseでサイトを有効にする場合に必要。TOMLには記載しない。
