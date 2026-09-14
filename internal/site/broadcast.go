@@ -113,6 +113,10 @@ func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, ss *session) 
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)
+	input.Genre = strings.TrimSpace(input.Genre)
+	if !strings.HasPrefix(input.Genre, "yp") {
+		input.Genre = "yp" + input.Genre
+	}
 	if input.Name == "" || len(input.Name) > 256 || len(input.Genre) > 256 || len(input.Description) > 2048 || len(input.Comment) > 2048 || len(input.ContactURL) > 2048 || input.Bitrate < 0 || input.Bitrate > 2147483647 {
 		http.Error(w, "名前は必須です。入力の長さも確認してください。", 400)
 		return

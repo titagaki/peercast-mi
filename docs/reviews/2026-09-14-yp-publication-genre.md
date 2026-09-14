@@ -34,3 +34,9 @@
 ### 取得元の訂正
 
 ユーザーへの再確認で、0yp限定は依頼の誤解と判明した。3YP取得を維持し、未掲載ローカル枠だけを除外する意図だった。yayaue.meでSP・p@YPのchannels_urlを復元し、TOMLパースと3件のURL・順序を検証済み。miの一覧実装はそのまま。
+
+### 掲載用接頭辞の修正完了
+
+サイト作成時のジャンルにypを自動補完した。pcgw `8cab31088104089f0649eef908594e570f26fbce`（作業ツリーclean）の `routes/broadcast.rb` のgenreも `models/yellow_page.rb` のadd_prefixを呼び、掲載先の接頭辞がなければ付ける。miでは固定掲載運用のypを補完する。pcgwの任意掲載先別prefix設定は導入しない。
+
+`TestBroadcastAddsPublicationGenrePrefix` で空欄・通常ジャンル・前後空白・既存接頭辞・制御文字列を検証し、ChannelInfoからPCPへ渡るGenreも確認した。`go vet ./...`、`go test ./...` は成功。本番への適用と実際の掲載は未確認。既存枠はジャンル編集または停止後の作り直しが必要。

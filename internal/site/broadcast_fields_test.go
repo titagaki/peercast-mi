@@ -60,3 +60,27 @@ func TestBroadcastMetadataRejectsInvalidValues(t *testing.T) {
 		}
 	}
 }
+
+func TestBroadcastAddsPublicationGenrePrefix(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"", "yp"}, {"ゲーム", "ypゲーム"}, {" Music ", "ypMusic"}, {"ypゲーム", "ypゲーム"}, {"yp?@@@game", "yp?@@@game"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			s := testSite(t)
+			ss := addSession(s, "alice", "123")
+			call(s, "POST", "/site/api/key", "alice", ss.CSRF, "")
+			body, _ := json.Marshal(map[string]string{"name": "Live", "genre": tc.input})
+			w := call(s, "POST", "/site/api/broadcast", "alice", ss.CSRF, string(body))
+			if w.Code != 200 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			ch, ok := s.mgr.GetByStreamKey(s.key(ss))
+			if !ok {
+				t.Fatal("missing channel")
+			}
+			if got := ch.Info().ToPCP().Genre; got != tc.want {
+				t.Fatalf("PCP genre=%q want %q", got, tc.want)
+			}
+		})
+	}
+}
