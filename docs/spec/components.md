@@ -459,6 +459,8 @@ func (c *Client) SetOnStopped(fn func())  // Run() 終了後に呼ばれるフ�
 
 ## 4.6 YPClient (COUT 接続)
 
+番組一覧の HTTP 取得は別の `internal/catalog` が担当する。`[[yp]].channels_url` の index.txt を全 YP 分取得し、60 秒キャッシュを管理 API とサイトで共有する。PCP の掲載処理とは独立。[サイト仕様](site.md#yp-の番組一覧) と [updateYPChannels](api/jsonrpc.md#updateypchannels) を参照。
+
 YP (root server) に PCP コントロール接続 (COUT) を確立し、チャンネル情報を定期ブロードキャストする。
 
 ### 接続フロー

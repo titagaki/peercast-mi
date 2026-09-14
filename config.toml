@@ -30,14 +30,25 @@ admin_pass = "hogehoge"
 
 # 複数の YP を定義しておき、起動時に -yp <name> で選択する。
 # デフォルト（-yp 省略時）は最初のエントリが使われる。
+# channels_url は番組一覧用。-yp にかかわらず設定された全 YP から取得する。
 [[yp]]
 name = "0yp"
 addr = "pcp://yayaue.me/"
+channels_url = "https://yayaue.me/yp/index.txt"
 
 [[yp]]
 name = "SP"
 addr = "pcp://bayonet.ddo.jp:7146/"
+channels_url = "http://bayonet.ddo.jp/sp/index.txt"
 
 [[yp]]
 name = "p@YP"
 addr = "pcp://root.p-at.net/"
+channels_url = "https://p-at.net/index.txt"
+
+[site]
+enabled = true
+dev_login = true
+listen = "127.0.0.1:8080"
+origin = "http://localhost:5173"
+rtmp_url = "rtmp://localhost:1945/live"

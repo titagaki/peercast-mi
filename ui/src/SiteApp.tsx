@@ -1,25 +1,29 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Notice, Secret } from "./components";
 import { useAction, useResource } from "./hooks";
 import {
   siteAPI,
   type SiteSession,
-  type SiteChannel,
+  type SiteDirectory,
   type OwnBroadcast,
 } from "./site-api";
 import { SitePlayer } from "./SitePlayer";
+import { SiteComments } from "./SiteComments";
+import { SiteChannelInfo } from "./SiteChannelInfo";
+import { channelExplanation } from "./site-channel-text";
 import "./App.css";
 import "./SiteApp.css";
 
 const loadSession = (signal: AbortSignal) =>
   siteAPI<SiteSession>("me", { signal });
 const loadChannels = (signal: AbortSignal) =>
-  siteAPI<SiteChannel[]>("channels", { signal });
+  siteAPI<SiteDirectory>("directory", { signal });
 const loadBroadcast = (signal: AbortSignal) =>
   siteAPI<OwnBroadcast>("broadcast", { signal });
 
 export default function SiteApp() {
   const session = useResource(loadSession, 30000);
+  const loginAction = useAction();
   return (
     <div className="app site-app">
       <a className="skip-link" href="#main">
@@ -31,31 +35,64 @@ export default function SiteApp() {
             mi
           </span>
           <div>
-            <h1>peercast-mi live</h1>
+            <h1>
+              <a className="site-brand" href="/">
+                peercast-mi live
+              </a>
+            </h1>
             <span className="muted">見つける、観る、配信する</span>
           </div>
         </div>
+        {session.data?.user && (
+          <SiteMenu session={session.data} onLogout={session.reload} />
+        )}
       </header>
       <main id="main">
         <Notice error={session.error} />
+        <Notice error={loginAction.error} />
+        {session.data?.devLogin && (
+          <p role="status">
+            ローカル開発モード：X
+            認証を省略しています。配信・視聴操作は実際のノードに反映されます。
+          </p>
+        )}
         {session.data?.user ? (
-          <SignedIn
-            key={session.data.user.id}
-            session={session.data}
-            onLogout={session.reload}
-          />
+          <SignedIn key={session.data.user.id} session={session.data} />
         ) : (
           <section className="panel site-welcome">
             <h2>PeerCast の配信を、ここから。</h2>
-            <p>このサイトで視聴・配信するには X ログインが必要です。</p>
+            <p>
+              {session.data?.devLogin
+                ? "開発用ユーザーで視聴・配信を確認できます。"
+                : "このサイトで視聴・配信するには X ログインが必要です。"}
+            </p>
             <p className="muted">
               サイトの帯域を共同で利用するための認証です。PeerCast
               の公開中継は制限しません。
             </p>
             {session.loading ? (
               <p role="status">ログイン状態を確認中…</p>
+            ) : session.error ? (
+              <p>
+                サイト接続を確認してから「ログイン状態を更新」を押してください。
+              </p>
+            ) : session.data?.devLogin ? (
+              <button
+                disabled={loginAction.busy}
+                onClick={() =>
+                  void loginAction.run(async () => {
+                    await siteAPI("dev-login", { method: "POST" });
+                    session.reload();
+                  }, "")
+                }
+              >
+                開発用ユーザーでログイン
+              </button>
             ) : (
-              <a className="site-login" href="/auth/x/start">
+              <a
+                className="site-login"
+                href={`/auth/x/start?next=${encodeURIComponent(window.location.pathname)}`}
+              >
                 X でログイン
               </a>
             )}
@@ -65,116 +102,210 @@ export default function SiteApp() {
           </section>
         )}
       </main>
-      <footer>
-        peercast-mi <span>公開 PCP 中継 / 認証付きサイト視聴</span>
+      <footer className="site-footer">
+        <span>peercast-mi</span>
+        <a href="/admin">管理パネル</a>
       </footer>
     </div>
   );
 }
 
-function SignedIn({
+function SiteMenu({
   session,
   onLogout,
 }: {
   session: SiteSession;
   onLogout: () => void;
 }) {
-  const channels = useResource(loadChannels, 10000);
   const action = useAction();
-  const [selected, setSelected] = useState("");
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState<"watch" | "broadcast">("watch");
-  const current = channels.data?.find((c) => c.id === selected);
+  const [open, setOpen] = useState(false);
+  const container = useRef<HTMLDivElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        toggle.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  return (
+    <div
+      className="site-menu"
+      ref={container}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <button
+        ref={toggle}
+        className="site-menu-toggle"
+        aria-label="メニュー"
+        aria-expanded={open}
+        aria-controls="site-navigation"
+        onClick={() => setOpen(!open)}
+      >
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden="true"
+        >
+          {open ? (
+            <path d="m6 6 12 12M6 18 18 6" />
+          ) : (
+            <path d="M3 6h18M3 12h18M3 18h18" />
+          )}
+        </svg>
+      </button>
+      <nav
+        id="site-navigation"
+        className="site-menu-panel"
+        aria-label="サイトナビゲーション"
+        hidden={!open}
+      >
+        <p>{session.user?.name} さん</p>
+        <a
+          href="/"
+          aria-current={window.location.pathname === "/" ? "page" : undefined}
+        >
+          チャンネル一覧
+        </a>
+        <a
+          href="/broadcast"
+          aria-current={
+            window.location.pathname === "/broadcast" ? "page" : undefined
+          }
+        >
+          配信する
+        </a>
+        <button
+          disabled={action.busy}
+          onClick={() =>
+            void action.run(async () => {
+              await siteAPI("logout", { method: "POST", csrf: session.csrf });
+              onLogout();
+            }, "")
+          }
+        >
+          ログアウト
+        </button>
+        <Notice error={action.error} />
+      </nav>
+    </div>
+  );
+}
+
+function SignedIn({ session }: { session: SiteSession }) {
+  const path = window.location.pathname;
+  const match = /^\/channels\/([a-fA-F0-9]{32})\/?$/.exec(path);
   return (
     <>
-      <div className="section-heading">
-        <p>{session.user?.name} さん</p>
-        <div className="actions">
-          <button
-            aria-pressed={page === "watch"}
-            onClick={() => setPage("watch")}
-          >
-            視聴する
-          </button>
-          <button
-            aria-pressed={page === "broadcast"}
-            onClick={() => setPage("broadcast")}
-          >
-            自分の配信
-          </button>
-          <button
-            disabled={action.busy}
-            onClick={() =>
-              void action.run(async () => {
-                await siteAPI("logout", { method: "POST", csrf: session.csrf });
-                onLogout();
-              }, "")
-            }
-          >
-            ログアウト
-          </button>
-        </div>
-      </div>
-      <Notice error={action.error} />
-      {page === "broadcast" ? (
+      {path === "/broadcast" ? (
         <Broadcast csrf={session.csrf ?? ""} />
+      ) : match ? (
+        <WatchPage id={match[1].toLowerCase()} />
+      ) : path === "/" || path === "/watch" ? (
+        <ChannelList />
       ) : (
-        <>
-          <Notice error={channels.error} />
-          <div className="section-heading">
-            <h2>配信中のチャンネル</h2>
-            <button onClick={channels.reload} disabled={channels.loading}>
-              一覧を更新
-            </button>
-          </div>
-          <label className="site-search">
-            チャンネルを検索
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="名前・ジャンル"
-            />
-          </label>
-          {current ? (
-            <>
-              <SitePlayer key={current.id} channel={current} />
-              <button onClick={() => setSelected("")}>視聴を閉じる</button>
-            </>
-          ) : (
-            selected && <p role="status">選択した配信は終了しました。</p>
-          )}
-          {channels.loading && !channels.data && (
-            <p role="status">配信一覧を読み込み中…</p>
-          )}
-          {channels.data?.length === 0 && (
-            <p>現在このノードにチャンネルはありません。</p>
-          )}
-          <div className="site-channels">
-            {channels.data
-              ?.filter((c) =>
-                `${c.name} ${c.genre}`
-                  .toLowerCase()
-                  .includes(search.toLowerCase()),
-              )
-              .map((c) => (
-                <article className="panel" key={c.id}>
-                  <span className="muted">
-                    {c.receiving ? "LIVE" : "接続待ち"} · {c.contentType}
-                  </span>
-                  <h3>{c.name}</h3>
-                  <p>{c.genre}</p>
-                  <p>{c.description}</p>
-                  <button
-                    onClick={() => setSelected(c.id)}
-                    aria-pressed={selected === c.id}
-                  >
-                    「{c.name}」を視聴
-                  </button>
-                </article>
-              ))}
-          </div>
-        </>
+        <p>
+          ページが見つかりません。<a href="/">チャンネル一覧へ</a>
+        </p>
+      )}
+    </>
+  );
+}
+
+function ChannelList() {
+  const channels = useResource(loadChannels, 10000);
+  const [search, setSearch] = useState("");
+  const rows = channels.data?.channels.filter((c) =>
+    `${c.name} ${channelExplanation(c)}`
+      .toLowerCase()
+      .includes(search.toLowerCase()),
+  );
+  return (
+    <>
+      <Notice error={channels.error} />
+      <div className="section-heading">
+        <h2>チャンネル一覧</h2>
+        <button onClick={channels.reload} disabled={channels.loading}>
+          一覧を更新
+        </button>
+      </div>
+      <label className="site-search">
+        チャンネルを検索
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="名前・ジャンル・説明"
+        />
+      </label>
+      {channels.loading && !channels.data && (
+        <p role="status">配信一覧を読み込み中…</p>
+      )}
+      {rows?.length === 0 && (
+        <p>
+          {search
+            ? "検索条件に合うチャンネルはありません。"
+            : "現在表示できるチャンネルはありません。"}
+        </p>
+      )}
+      <div className="site-channels">
+        {rows?.map((c) => (
+          <a
+            className="panel site-channel-card"
+            key={c.id}
+            href={`/channels/${c.id}`}
+            aria-label={c.name || "名前なし"}
+          >
+            <SiteChannelInfo channel={c} />
+          </a>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function WatchPage({ id }: { id: string }) {
+  const channels = useResource(loadChannels, 10000);
+  const current = channels.data?.channels.find((c) => c.id === id);
+  return (
+    <>
+      <a className="site-back" href="/">
+        ← チャンネル一覧
+      </a>
+      <Notice error={channels.error} />
+      {current ? (
+        <div className="site-watch-layout">
+          <SitePlayer key={current.id} channel={current} />
+          <SiteComments
+            key={current.id + current.contactUrl}
+            channelId={current.id}
+          />
+        </div>
+      ) : (
+        <p role="status">
+          {channels.loading && !channels.data
+            ? "チャンネルを読み込み中…"
+            : channels.error
+              ? "チャンネル情報を取得できません。"
+              : "この配信は終了したか、一覧にありません。"}
+        </p>
       )}
     </>
   );
@@ -188,7 +319,7 @@ function Broadcast({ csrf }: { csrf: string }) {
   const [description, setDescription] = useState("");
   return (
     <section className="panel">
-      <h2>自分の配信</h2>
+      <h2>配信する</h2>
       <Notice error={own.error || action.error} message={action.message} />
       <button onClick={own.reload} disabled={own.loading || action.busy}>
         配信状態を更新

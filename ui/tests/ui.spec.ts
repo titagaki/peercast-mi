@@ -125,7 +125,7 @@ async function mockAPI(
 
 test("info editing preserves the latest track", async ({ page }) => {
   const calls = await mockAPI(page);
-  await page.goto("/");
+  await page.goto("/admin");
   await page
     .getByRole("button", { name: "Morning Radio", exact: true })
     .click();
@@ -147,7 +147,7 @@ test("failed track read does not submit a destructive empty track", async ({
       ? { error: { code: -32603, message: "track unavailable" } }
       : undefined,
   );
-  await page.goto("/");
+  await page.goto("/admin");
   await page
     .getByRole("button", { name: "Morning Radio", exact: true })
     .click();
@@ -175,7 +175,7 @@ test("channel switch discards old detail responses and disconnects correct chann
         }
       : undefined,
   );
-  await page.goto("/");
+  await page.goto("/admin");
   await page
     .getByRole("button", { name: "Morning Radio", exact: true })
     .click();
@@ -201,75 +201,52 @@ test("channel switch discards old detail responses and disconnects correct chann
     .toEqual(["b", 7]);
 });
 
-test("broadcast key failure is visible, retryable and blocks submission", async ({
+test("admin has no broadcast start or key issuance controls", async ({
   page,
 }) => {
-  let fail = true;
-  const calls = await mockAPI(page, (request) =>
-    request.method === "listStreamKeys" && fail
-      ? { error: { code: -32603, message: "keys unavailable" } }
-      : undefined,
-  );
-  await page.goto("/");
-  await page.getByRole("button", { name: "＋ 配信を開始" }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.getByRole("alert")).toContainText("keys unavailable");
+  const calls = await mockAPI(page);
+  await page.goto("/admin");
   await expect(
-    dialog.getByRole("button", { name: "配信を開始", exact: true }),
-  ).toBeDisabled();
-  fail = false;
-  await dialog.getByRole("button", { name: "キーを再読み込み" }).click();
-  await dialog.getByLabel("ストリームキー").selectOption("sk_secret");
-  await dialog.getByLabel("チャンネル名").fill("New radio");
-  await dialog.getByRole("button", { name: "配信を開始", exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  expect(
-    calls.find((call) => call.method === "broadcastChannel")?.params[0],
-  ).toMatchObject({ streamKey: "sk_secret", info: { name: "New radio" } });
-});
-
-test("empty keys explain the prerequisite", async ({ page }) => {
-  await mockAPI(page, (request) =>
-    request.method === "listStreamKeys" ? { result: [] } : undefined,
-  );
-  await page.goto("/");
-  await page.getByRole("button", { name: "＋ 配信を開始" }).click();
-  await expect(
-    page.getByText("キーがありません。", { exact: false }),
+    page.getByRole("heading", { name: "チャンネル", exact: true }),
   ).toBeVisible();
-  await expect(
-    page
-      .getByRole("dialog")
-      .getByRole("button", { name: "配信を開始", exact: true }),
-  ).toBeDisabled();
-});
-
-test("issuing a key prevents duplicate submissions", async ({ page }) => {
-  const calls = await mockAPI(page, (request) =>
-    request.method === "issueStreamKey"
-      ? { result: null, delay: 500 }
-      : undefined,
-  );
-  await page.goto("/");
+  await expect(page.getByRole("button", { name: /配信を開始/ })).toHaveCount(0);
   await page
     .getByRole("button", { name: "ストリームキー", exact: true })
     .click();
-  await page.getByLabel("アカウント名").fill("new-account");
-  await page.locator("form").evaluate((form) => {
-    form.dispatchEvent(
-      new Event("submit", { bubbles: true, cancelable: true }),
-    );
-    form.dispatchEvent(
-      new Event("submit", { bubbles: true, cancelable: true }),
-    );
-  });
-  await expect(page.getByRole("button", { name: "処理中…" })).toBeDisabled();
+  await expect(page.getByText("radio", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("ストリームキーを発行しました。", { exact: true }),
-  ).toBeVisible();
-  expect(calls.filter((call) => call.method === "issueStreamKey")).toHaveLength(
-    1,
+    page.getByRole("button", { name: "発行", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByLabel("アカウント名")).toHaveCount(0);
+  expect(
+    calls.some(
+      (c) => c.method === "issueStreamKey" || c.method === "broadcastChannel",
+    ),
+  ).toBe(false);
+});
+
+test("admin key read failure is retryable and revocation is retained", async ({
+  page,
+}) => {
+  let fail = true;
+  const calls = await mockAPI(page, (r) =>
+    r.method === "listStreamKeys" && fail
+      ? { error: { code: -32603, message: "keys unavailable" } }
+      : undefined,
   );
+  await page.goto("/admin");
+  await page
+    .getByRole("button", { name: "ストリームキー", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("keys unavailable");
+  fail = false;
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await expect(page.getByText("radio", { exact: true })).toBeVisible();
+  page.on("dialog", (d) => d.accept());
+  await page.getByRole("button", { name: "失効", exact: true }).click();
+  await expect
+    .poll(() => calls.some((c) => c.method === "revokeStreamKey"))
+    .toBe(true);
 });
 
 test("read failures are not displayed as empty success and can retry", async ({
@@ -281,7 +258,7 @@ test("read failures are not displayed as empty success and can retry", async ({
       ? { error: { code: -32603, message: "offline" } }
       : undefined,
   );
-  await page.goto("/");
+  await page.goto("/admin");
   await expect(page.getByRole("alert")).toContainText("offline");
   await expect(
     page.getByText("チャンネルはありません。", { exact: false }),
@@ -298,7 +275,7 @@ test("keyboard selection, dialog escape and contextual bump labels", async ({
   page,
 }) => {
   const calls = await mockAPI(page);
-  await page.goto("/");
+  await page.goto("/admin");
   const channelButton = page.getByRole("button", {
     name: "Morning Radio",
     exact: true,
@@ -328,7 +305,7 @@ test("responsive screens, secret masking and node information", async ({
   page,
 }, testInfo) => {
   await mockAPI(page);
-  await page.goto("/");
+  await page.goto("/admin");
   await page
     .getByRole("button", { name: "Morning Radio", exact: true })
     .click();
@@ -376,7 +353,7 @@ test("pending save is locked and cannot be dismissed", async ({ page }) => {
       ? { result: null, delay: 700 }
       : undefined,
   );
-  await page.goto("/");
+  await page.goto("/admin");
   await page
     .getByRole("button", { name: "Morning Radio", exact: true })
     .click();

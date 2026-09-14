@@ -1,5 +1,7 @@
 # docs/
 
+次セッションの再開時は [2026-09-14 引き継ぎ](handoffs/2026-09-14.md) を参照。未コミットの変更範囲、開発起動方法、検証結果をまとめている。
+
 | ディレクトリ / ファイル | 内容 | 書くとき |
 |:--|:--|:--|
 | [spec/](spec/) | **仕様**: 現在の実装がどう動くか | 動作を変えるコミットで同時に更新する |
@@ -31,6 +33,18 @@ peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp
 
 ## reviews/
 
+- [2026-09-14-site-genre-controls.md](reviews/2026-09-14-site-genre-controls.md) — YP4G ジャンル資料とサイト表示の制御部分除去
+
+- [2026-09-14-site-white-channel-info.md](reviews/2026-09-14-site-white-channel-info.md) — 白基調、ぺからいぶを参考にした文字情報・YP アイコンと検証
+
+- [2026-09-14-site-mobile-navigation.md](reviews/2026-09-14-site-mobile-navigation.md) — スマホ向けメニュー、管理リンク、ライブの時間軸表示と検証
+
+- [2026-09-14-viewing-pages-comments.md](reviews/2026-09-14-viewing-pages-comments.md) — 一覧・個別視聴・管理パスの分離、自動再生、掲示板コメントと検証
+
+- [2026-09-14-yp-directory.md](reviews/2026-09-14-yp-directory.md) — YP 一覧取得・updateYPChannels・サイトからの中継開始、参照資料と検証
+
+- [2026-09-14-development-login.md](reviews/2026-09-14-development-login.md) — X 登録前のローカル開発ログイン、制限と検証
+- [2026-09-14-site-dev-proxy.md](reviews/2026-09-14-site-dev-proxy.md) — localhost:5173/watch の API 転送・エラー案内の修正と検証
 - [2026-09-14-site-implementation.md](reviews/2026-09-14-site-implementation.md) — 認証付きサイトの実装範囲、検証と導入時の確認事項
 - [2026-09-14-peca-live-viewing-auth-design.md](reviews/2026-09-14-peca-live-viewing-auth-design.md) — peca-live の視聴機能・認証調査、X ログインと視聴・配信制限の拡張案（未採用）
 - [2026-09-14-ui-improvements.md](reviews/2026-09-14-ui-improvements.md) — 管理 UI の操作不具合・表示改善、ブラウザー回帰テストと未確認範囲

@@ -152,7 +152,7 @@ func TestKeySaveFailure(t *testing.T) {
 }
 func TestOAuthPKCECallbackAndReplay(t *testing.T) {
 	s := testSite(t)
-	w := call(s, "GET", "/auth/x/start", "", "", "")
+	w := call(s, "GET", "/auth/x/start?next=/channels/0123456789abcdef0123456789abcdef", "", "", "")
 	if w.Code != 302 {
 		t.Fatal(w.Code)
 	}
@@ -197,6 +197,9 @@ func TestOAuthPKCECallbackAndReplay(t *testing.T) {
 	if w.Code != 303 || calls != 2 {
 		t.Fatal(w.Code, w.Body.String(), calls)
 	}
+	if w.Header().Get("Location") != "/channels/0123456789abcdef0123456789abcdef" {
+		t.Fatal("login did not return to channel", w.Header().Get("Location"))
+	}
 	var sid string
 	for _, c := range w.Result().Cookies() {
 		if c.Name == sessionCookie {
@@ -222,7 +225,7 @@ func TestOAuthRejectsInvalidStateAndProviderFailure(t *testing.T) {
 	for _, kind := range []string{"state", "expired", "denied", "provider"} {
 		t.Run(kind, func(t *testing.T) {
 			s := testSite(t)
-			f := flow{"correct", "verifier", time.Now().Add(time.Minute)}
+			f := flow{"correct", "verifier", time.Now().Add(time.Minute), "/"}
 			if kind == "expired" {
 				f.Expires = time.Now().Add(-time.Second)
 			}

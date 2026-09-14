@@ -1,33 +1,10 @@
-import { useState, type FormEvent } from "react";
-import { issueStreamKey, listStreamKeys, revokeStreamKey } from "./api";
+import { listStreamKeys, revokeStreamKey } from "./api";
 import { Notice, Refresh, Secret, TableArea } from "./components";
 import { useAction, useResource } from "./hooks";
-
-function generateStreamKey() {
-  return (
-    "sk_" +
-    Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-      byte.toString(16).padStart(2, "0"),
-    ).join("")
-  );
-}
 
 export function StreamKeysPage() {
   const keys = useResource(listStreamKeys);
   const action = useAction();
-  const [account, setAccount] = useState("");
-  const [key, setKey] = useState(generateStreamKey);
-  const [visible, setVisible] = useState(false);
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (!account.trim() || !key.trim()) return;
-    void action.run(async () => {
-      await issueStreamKey(account.trim(), key.trim());
-      setAccount("");
-      setKey(generateStreamKey());
-      keys.reload();
-    }, "ストリームキーを発行しました。");
-  };
   return (
     <section>
       <header className="page-header">
@@ -46,55 +23,6 @@ export function StreamKeysPage() {
       </header>
       <Notice error={keys.error} />
       <Notice error={action.error} message={action.message} />
-      <section className="panel">
-        <h3>キーを発行</h3>
-        <form onSubmit={submit}>
-          <fieldset disabled={action.busy}>
-            <div className="issue-grid">
-              <label>
-                アカウント名
-                <input
-                  autoComplete="off"
-                  value={account}
-                  onChange={(event) => setAccount(event.target.value)}
-                  placeholder="例: my-broadcast"
-                  required
-                />
-              </label>
-              <label>
-                ストリームキー
-                <input
-                  type={visible ? "text" : "password"}
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={key}
-                  onChange={(event) => setKey(event.target.value)}
-                  required
-                />
-              </label>
-            </div>
-            <div className="form-actions">
-              <button
-                type="button"
-                aria-pressed={visible}
-                onClick={() => setVisible(!visible)}
-              >
-                {visible ? "キーを隠す" : "キーを表示"}
-              </button>
-              <button type="button" onClick={() => setKey(generateStreamKey())}>
-                キーを再生成
-              </button>
-              <button
-                className="primary"
-                type="submit"
-                disabled={!account.trim() || !key.trim()}
-              >
-                {action.busy ? "処理中…" : "発行"}
-              </button>
-            </div>
-          </fieldset>
-        </form>
-      </section>
       <div className="section-heading">
         <h3>発行済みのキー</h3>
         <p className="muted">失効させても、現在の配信は停止しません。</p>

@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "playwright test",
+    "test:proxy": "node --test tests/dev-proxy.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

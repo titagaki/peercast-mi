@@ -9,7 +9,7 @@
   margin: 1rem 1rem 1rem 0;
   border-radius: 0.6rem;
   background: var(--accent, #087f5b);
-  color: white;
+  color: var(--surface);
   font-weight: 650;
 }
 .site-search {
@@ -23,13 +23,21 @@
   gap: 1rem;
   margin-top: 1.5rem;
 }
-.site-channels article {
+.site-channel-card {
+  display: block;
+  color: var(--text);
+  text-decoration: none;
   margin: 0;
   overflow-wrap: anywhere;
 }
+.site-channel-card:hover,
+.site-channel-card:focus-visible {
+  border-color: var(--accent);
+  background: var(--tint);
+}
 .site-player {
-  max-width: 64rem;
-  margin: 0 auto 1rem;
+  min-width: 0;
+  margin: 0;
 }
 .site-player video {
   display: block;
@@ -46,4 +54,249 @@
 }
 .site-app code {
   overflow-wrap: anywhere;
+}
+.site-brand {
+  color: inherit;
+  text-decoration: none;
+}
+.site-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+.site-menu-toggle {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+}
+.site-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  z-index: 10;
+  width: min(18rem, calc(100vw - 2rem));
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  box-shadow: 0 8px 28px #0002;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.site-menu-panel[hidden] {
+  display: none;
+}
+.site-menu-panel p {
+  margin: 0.5rem;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.site-menu-panel a,
+.site-menu-panel button {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.5rem;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 1rem;
+  text-align: left;
+}
+.site-menu-panel a:hover,
+.site-menu-panel a[aria-current] {
+  background: var(--bg);
+  color: var(--accent);
+}
+.site-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.site-footer a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.site-live-label {
+  display: inline-block;
+  margin-bottom: 0.6rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+/* The live endpoint has no recording/Range support. Keep native transport
+   controls, but do not present the growing MSE buffer as a seekable recording.
+   These native-control hooks are specific to Chromium/WebKit. */
+.site-player video::-webkit-media-controls-timeline,
+.site-player video::-webkit-media-controls-current-time-display,
+.site-player video::-webkit-media-controls-time-remaining-display {
+  display: none;
+}
+.site-back,
+.site-player a {
+  color: var(--accent);
+}
+.site-back {
+  display: inline-block;
+  margin: 0.5rem 0 1.5rem;
+}
+.site-watch-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(18rem, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.site-comments {
+  min-width: 0;
+  margin: 0;
+}
+.site-comment-list {
+  max-height: 65vh;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.site-comment-list article {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.site-comment-list p {
+  white-space: pre-wrap;
+  margin: 0.4rem 0;
+}
+@media (max-width: 850px) {
+  .site-app {
+    padding: 0 1rem;
+  }
+  .site-app .app-header {
+    flex-direction: row;
+    min-height: 76px;
+    gap: 0.5rem;
+    padding: 0.75rem 0;
+  }
+  .site-app .brand {
+    min-width: 0;
+    flex-shrink: 1;
+    gap: 0.6rem;
+  }
+  .site-app .brand h1 {
+    font-size: 1.1rem;
+  }
+  .site-app .brand-mark {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+  }
+  .site-app main {
+    padding: 1rem 0 2rem;
+  }
+  .site-app .section-heading {
+    margin-top: 0.25rem;
+  }
+  .site-app .site-back {
+    margin: 0 0 0.75rem;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .site-welcome {
+    margin: 1rem auto;
+    padding: 1.25rem;
+  }
+  .site-app input,
+  .site-app select {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  .site-app button {
+    min-height: 44px;
+  }
+  .site-player h2 {
+    overflow-wrap: anywhere;
+  }
+  .site-watch-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .site-comment-list {
+    max-height: 24rem;
+  }
+}
+.site-app {
+  color-scheme: light;
+  --bg: #fff;
+  --surface: #fff;
+  --text: #24262b;
+  --muted: #656970;
+  --border: #e6e7eb;
+  --accent: #385a8a;
+  --tint: #f4f6f9;
+  --danger: #a62d38;
+  --danger-bg: #fff1f2;
+  --shadow: none;
+  color: var(--text);
+  background: var(--bg);
+  min-height: 100vh;
+}
+/* Cover the gutters too, without changing the management panel's theme. */
+body:has(.site-app) {
+  background: #fff;
+  color-scheme: light;
+}
+.site-channel-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+}
+.site-channel-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+.site-channel-copy {
+  min-width: 0;
+  flex: 1;
+}
+.site-channel-info h3,
+.site-channel-info h2 {
+  font-size: 1.05rem;
+  font-weight: 650;
+  line-height: 1.5;
+  margin: 0 0 0.25rem;
+}
+.site-channel-description {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.site-channel-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.8rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 0.45rem;
+}
+.site-channel-stats:empty {
+  display: none;
+}
+.site-channel-detail {
+  margin: 1rem 0;
+}
+.site-channel-detail .site-channel-description {
+  color: var(--text);
+  font-size: 1rem;
+}
+.site-channel-detail .site-channel-icon {
+  width: 56px;
+  height: 56px;
 }

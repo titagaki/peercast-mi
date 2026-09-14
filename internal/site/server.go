@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/titagaki/peercast-mi/internal/catalog"
 	"github.com/titagaki/peercast-mi/internal/channel"
 	"github.com/titagaki/peercast-mi/internal/config"
 	"github.com/titagaki/peercast-pcp/pcp"
@@ -45,9 +46,12 @@ type session struct {
 type flow struct {
 	State, Verifier string
 	Expires         time.Time
+	Next            string
 }
 
 type Server struct {
+	boards                              *boardReader
+	catalog                             *catalog.Catalog
 	cfg                                 config.Site
 	mgr                                 *channel.Manager
 	bump                                func()
@@ -73,6 +77,12 @@ func randomToken() string {
 }
 
 func New(cfg config.Site, mgr *channel.Manager, backendPort int, bump func()) (*Server, error) {
+	if cfg.MaxRelayChannels < 0 {
+		return nil, errors.New("site.max_relay_channels must not be negative")
+	}
+	if cfg.MaxRelayChannels == 0 {
+		cfg.MaxRelayChannels = 8
+	}
 	u, err := url.Parse(cfg.Origin)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return nil, errors.New("site.origin must be an absolute origin without a path")
@@ -87,6 +97,13 @@ func New(cfg config.Site, mgr *channel.Manager, backendPort int, bump func()) (*
 	cfg.Origin = strings.TrimSuffix(cfg.Origin, "/")
 	if cfg.Listen == "" {
 		cfg.Listen = "127.0.0.1:8080"
+	}
+	if cfg.DevLogin {
+		host, _, err := net.SplitHostPort(cfg.Listen)
+		ip := net.ParseIP(host)
+		if err != nil || ip == nil || !ip.IsLoopback() || !loopback || u.Scheme != "http" {
+			return nil, errors.New("site.dev_login requires an HTTP loopback origin and a literal loopback listen address; never expose development login publicly")
+		}
 	}
 	if cfg.UIDir == "" {
 		cfg.UIDir = "ui/dist"
@@ -104,11 +121,12 @@ func New(cfg config.Site, mgr *channel.Manager, backendPort int, bump func()) (*
 		return nil, errors.New("site.rtmp_url must be the public RTMP(S) application URL")
 	}
 	clientID, secret := os.Getenv("PEERCAST_X_CLIENT_ID"), os.Getenv("PEERCAST_X_CLIENT_SECRET")
-	if clientID == "" || secret == "" {
+	if !cfg.DevLogin && (clientID == "" || secret == "") {
 		return nil, errors.New("PEERCAST_X_CLIENT_ID and PEERCAST_X_CLIENT_SECRET are required")
 	}
 	s := &Server{cfg: cfg, mgr: mgr, bump: bump, clientID: clientID, clientSecret: secret, viewerToken: randomToken(),
 		client:   &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		boards:   newBoardReader(),
 		tokenURL: "https://api.x.com/2/oauth2/token", meURL: "https://api.x.com/2/users/me",
 		sessions: make(map[string]*session), flows: make(map[string]flow), viewers: make(map[string]int)}
 	backend, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", backendPort))
@@ -131,6 +149,9 @@ func (s *Server) ListenAddress() string { return s.cfg.Listen }
 
 // SetBump must be called before serving requests.
 func (s *Server) SetBump(bump func()) { s.bump = bump }
+
+// SetCatalog must be called before serving requests.
+func (s *Server) SetCatalog(c *catalog.Catalog) { s.catalog = c }
 
 func (s *Server) cookie(w http.ResponseWriter, name, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", MaxAge: maxAge, HttpOnly: true, Secure: strings.HasPrefix(s.cfg.Origin, "https://"), SameSite: http.SameSiteLaxMode})
@@ -168,15 +189,19 @@ func (s *Server) authenticate(r *http.Request) *session {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /auth/x/start", s.login)
-	mux.HandleFunc("GET /auth/x/callback", s.callback)
+	if s.cfg.DevLogin {
+		mux.HandleFunc("POST /site/api/dev-login", s.developmentLogin)
+	} else {
+		mux.HandleFunc("GET /auth/x/start", s.login)
+		mux.HandleFunc("GET /auth/x/callback", s.callback)
+	}
 	mux.HandleFunc("GET /site/api/me", func(w http.ResponseWriter, r *http.Request) {
 		ss := s.authenticate(r)
 		if ss == nil {
-			reply(w, map[string]any{"user": nil})
+			reply(w, map[string]any{"user": nil, "devLogin": s.cfg.DevLogin})
 			return
 		}
-		reply(w, map[string]any{"user": ss.User, "csrf": ss.CSRF})
+		reply(w, map[string]any{"user": ss.User, "csrf": ss.CSRF, "devLogin": s.cfg.DevLogin})
 	})
 	protected := func(pattern string, h func(http.ResponseWriter, *http.Request, *session)) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +219,8 @@ func (s *Server) Handler() http.Handler {
 	}
 	protected("POST /site/api/logout", s.logout)
 	protected("GET /site/api/channels", s.channels)
+	protected("GET /site/api/directory", s.directory)
+	protected("GET /site/api/channels/{id}/comments", s.comments)
 	protected("GET /site/api/broadcast", s.broadcastInfo)
 	protected("POST /site/api/key", s.rotateKey)
 	protected("POST /site/api/broadcast", s.broadcast)
@@ -201,15 +228,35 @@ func (s *Server) Handler() http.Handler {
 	protected("GET /site/stream/{id}", s.stream)
 	// Serve only the compiled UI, never project files or the administrative API.
 	mux.Handle("GET /assets/", http.FileServer(http.Dir(s.cfg.UIDir)))
-	mux.HandleFunc("GET /watch", func(w http.ResponseWriter, r *http.Request) {
+	page := func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(s.cfg.UIDir, "index.html"))
+	}
+	mux.HandleFunc("GET /{$}", page)
+	mux.HandleFunc("GET /channels/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := parseID(r.PathValue("id")); err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		page(w, r)
 	})
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/watch", http.StatusFound) })
+	mux.HandleFunc("GET /broadcast", page)
+	mux.HandleFunc("GET /admin", page)
+	mux.HandleFunc("GET /admin/{$}", page)
+	mux.HandleFunc("GET /watch", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/", http.StatusFound) })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+		if s.cfg.DevLogin {
+			host, _, err := net.SplitHostPort(r.RemoteAddr)
+			ip := net.ParseIP(host)
+			origin, _ := url.Parse(s.cfg.Origin)
+			if err != nil || ip == nil || !ip.IsLoopback() || r.Host != origin.Host {
+				http.Error(w, "開発用サイトは設定された loopback ホストからのみ利用できます。", 403)
+				return
+			}
+		}
 		if origin := r.Header.Get("Origin"); origin != "" && origin != s.cfg.Origin {
 			http.Error(w, "origin not allowed", 403)
 			return
@@ -230,7 +277,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		delete(s.flows, c.Value)
 	}
 	id := randomToken()
-	f := flow{randomToken(), randomToken(), time.Now().Add(5 * time.Minute)}
+	f := flow{randomToken(), randomToken(), time.Now().Add(5 * time.Minute), safeReturnPath(r.URL.Query().Get("next"))}
 	s.flows[id] = f
 	s.mu.Unlock()
 	s.cookie(w, flowCookie, id, 300)
@@ -259,12 +306,30 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "X ログインに失敗しました。サイトへ戻って再試行してください。", 502)
 		return
 	}
+	if s.startSession(w, r, u) {
+		http.Redirect(w, r, safeReturnPath(f.Next), http.StatusSeeOther)
+	}
+}
+
+// Development login still creates an ordinary session: ownership, CSRF,
+// viewer limits and the media gate are not bypassed.
+func (s *Server) developmentLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Origin") != s.cfg.Origin {
+		http.Error(w, "開発用ログインはサイト画面のボタンから行ってください。", 403)
+		return
+	}
+	if s.startSession(w, r, user{ID: "dev-local", Name: "ローカル開発ユーザー"}) {
+		reply(w, map[string]bool{"ok": true})
+	}
+}
+
+func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u user) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked()
 	if len(s.sessions) >= 10000 {
 		http.Error(w, "ログインが混み合っています。", 503)
-		return
+		return false
 	}
 	if old, e := r.Cookie(sessionCookie); e == nil {
 		if ss := s.sessions[old.Value]; ss != nil {
@@ -275,7 +340,7 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	id := randomToken()
 	s.sessions[id] = &session{u, randomToken(), time.Now().Add(sessionTTL), make(chan struct{})}
 	s.cookie(w, sessionCookie, id, int(sessionTTL.Seconds()))
-	http.Redirect(w, r, "/watch", http.StatusSeeOther)
+	return true
 }
 
 func (s *Server) exchange(ctx context.Context, code, verifier string) (user, error) {
@@ -341,10 +406,6 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, ss *session) {
 		http.Error(w, "invalid channel", 400)
 		return
 	}
-	if _, ok := s.mgr.GetByID(id); !ok {
-		http.Error(w, "配信は終了しました。", 404)
-		return
-	}
 	s.mu.Lock()
 	if s.total >= s.cfg.MaxViewers || s.viewers[ss.User.ID] >= s.cfg.MaxViewersPerUser {
 		s.mu.Unlock()
@@ -373,6 +434,9 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, ss *session) {
 		case <-ctx.Done():
 		}
 	}()
+	if !s.ensureChannel(w, r.WithContext(ctx), id) {
+		return
+	}
 	s.proxy.ServeHTTP(streamWriter{w}, r.WithContext(ctx))
 }
 

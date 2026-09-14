@@ -11,6 +11,7 @@ Web UI は `ui/`、オプションの X 認証付き視聴・配信サイトは 
 - `internal/relay` — 上流 PCP ノードへの接続・接続先選択・再接続
 - `internal/servent` — ポート 7144 の受け付け (PCP リレー送信、HTTP 視聴、/pls/、JSON-RPC の転送)
 - `internal/yp` — YP への COUT 接続とチャンネル情報の送信
+- `internal/catalog` — YP の HTTP 番組一覧取得、管理 API・視聴サイト共通キャッシュ
 - `internal/jsonrpc` — JSON-RPC API
 - `internal/site` — X 認証、利用者専用 API、認証付き HTTP 視聴（公開 PCP は維持）
 - `internal/pcputil` — PCP Host アトム構築の共通処理

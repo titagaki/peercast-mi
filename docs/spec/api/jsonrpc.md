@@ -70,6 +70,7 @@ JSON-RPC 2.0 仕様に準拠する。パラメータは原則として **位置�
 | `getChannelConnections` | `[channelId]` | 接続情報の配列 |
 | `stopChannelConnection` | `[channelId, connectionId]` | `boolean` |
 | `getYellowPages` | なし | YP オブジェクトの配列 |
+| `updateYPChannels` | なし | YP 掲載番組の配列（自ノード一覧とは別） |
 | `getChannelRelayTree` | `[channelId]` | ノードオブジェクトの配列 |
 
 `channelId` は 32 文字の hex 文字列（大文字・小文字どちらも可）。
@@ -438,6 +439,24 @@ config.toml の `peercast_port` / `rtmp_port` の値を返す。
 | `yellowPageId` | config.toml の `[[yp]]` エントリの 0 始まりインデックス |
 | `name` | `[[yp]].name` |
 | `uri` / `announceUri` | `[[yp]].addr`（`pcp://` スキームがなければ自動付与） |
+
+### `updateYPChannels`
+
+**パラメータ:** なし。省略、`null`、空配列が使える。他の引数は参照しない。
+
+`[[yp]].channels_url` が設定された全 YP から一覧を取得する。`-yp` による PCP 掲載先の選択とは独立。URL 未設定の YP は取得しない。管理 API の既存の認証・Origin 制限が適用され、サイト利用者にはこの管理 API を公開しない。
+
+**返却値:** 次のオブジェクトの配列。ID は大文字の 32 桁 hex。文字列は HTML エンティティをデコードする。数値の空欄・不正値は `null`、非表示数の `-1` は維持する。
+
+```json
+[{"yellowPage":"SP","name":"番組","channelId":"0123456789ABCDEF0123456789ABCDEF","tracker":"8.8.8.8:7144","contactUrl":"","genre":"ゲーム","description":"説明","comment":"","bitrate":1500,"contentType":"FLV","trackTitle":"","album":"","creator":"","trackUrl":"","listeners":-1,"relays":-1,"uptime":5400}]
+```
+
+`creator` はトラックの Artist、`uptime` は Duration の `H:MM` を秒に変換した値（単一整数も秒として受理）。ゼロ ID の告知行と複数 YP の重複 ID はこの API では残す。チャンネルを作成・中継する操作ではない。
+
+キャッシュはサイトと共通で 60 秒。更新中の要求は同じ取得完了を待つ。取得全体は最大 5 秒、並行 HTTP 取得は最大 4、各応答は最大 4 MiB、行は 64 KiB 未満、各 YP は最大 10,000 行。UTF-8 の index.txt を解析し、通常 19 フィールド、末尾省略の 10 フィールド以上も受理する。不正 ID 行はスキップし、短すぎる行・HTML・不正 UTF-8・サイズ超過・HTTP 非 200 はその YP の取得失敗となる。
+
+YP 単位の失敗は RPC エラーにはせず、最終成功から 5 分未満ならその一覧、以後はその YP の空一覧を使用する。設定なし / 初回全失敗なら `[]`。失敗状態はサイトの `/site/api/directory` に含める。取得処理自体が完了できない場合の RPC エラーは `-32603` / `YP directory update failed`。戻り値の採用範囲は [ADR 0021](../../decisions/0021-yp-channel-directory.md)。
 
 ---
 

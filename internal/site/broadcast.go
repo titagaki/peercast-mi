@@ -17,24 +17,40 @@ type channelView struct {
 	Name        string `json:"name"`
 	Genre       string `json:"genre"`
 	Description string `json:"description"`
+	Comment     string `json:"comment,omitempty"`
+	Uptime      *int   `json:"uptime,omitempty"`
 	ContactURL  string `json:"contactUrl"`
 	ContentType string `json:"contentType"`
 	Receiving   bool   `json:"receiving"`
 	Listeners   int    `json:"listeners"`
+	YellowPage  string `json:"yellowPage,omitempty"`
+	Playable    *bool  `json:"playable,omitempty"`
 }
 
 func view(ch *channel.Channel) channelView {
 	i := ch.Info()
-	return channelView{hex.EncodeToString(ch.ID[:]), i.Name, i.Genre, i.Desc, i.URL, i.Type, ch.IsReceiving(), ch.TotalListeners()}
+	v := channelView{ID: hex.EncodeToString(ch.ID[:]), Name: i.Name, Genre: i.Genre, Description: i.Desc, Comment: i.Comment, ContactURL: i.URL, ContentType: i.Type, Receiving: ch.IsReceiving(), Listeners: ch.TotalListeners()}
+	// A local relay's age is not the broadcaster's uptime.
+	if ch.IsBroadcasting() {
+		uptime := int(ch.UptimeSeconds())
+		v.Uptime = &uptime
+	}
+	return v
 }
 func (s *Server) channels(w http.ResponseWriter, r *http.Request, ss *session) {
-	rows := make([]channelView, 0)
-	for _, ch := range s.mgr.List() {
-		rows = append(rows, view(ch))
+	rows, _, err := s.channelList(r)
+	if err != nil {
+		http.Error(w, "一覧の取得を中断しました。", 503)
+		return
 	}
 	reply(w, rows)
 }
-func account(ss *session) string { return "site:x:" + ss.User.ID }
+func account(ss *session) string {
+	if ss.User.ID == "dev-local" {
+		return "site:dev:local"
+	}
+	return "site:x:" + ss.User.ID
+}
 func (s *Server) key(ss *session) string {
 	for _, e := range s.mgr.ListStreamKeys() {
 		if e.AccountName == account(ss) {

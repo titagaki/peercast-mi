@@ -16,7 +16,7 @@
 ### 機能
 
 - [ ] X アプリ・公開 HTTPS / RTMPS を設定し、実ログイン、OBS → サイト視聴、他ノードへの公開 PCP 中継を結合検証する — [導入手順](spec/site.md)、[実装記録](reviews/2026-09-14-site-implementation.md)。秘密情報・公開 URL は利用環境で設定する
-- [ ] 視聴サイトを拡充する: 外部 YP 一覧、掲示板内蔵閲覧、お気に入り同期、HLS とスマホ実機検証、通知 — [比較表](reviews/2026-09-14-peca-live-viewing-auth-design.md)。初期実装は自ノード一覧・FLV プレイヤー・本人の配信管理
+- [ ] 視聴サイトを拡充する: お気に入り同期、HLS とスマホ実機検証、通知 — [比較表](reviews/2026-09-14-peca-live-viewing-auth-design.md)。外部 YP 一覧は [ADR 0021](decisions/0021-yp-channel-directory.md)、掲示板閲覧は [ADR 0022](decisions/0022-viewing-pages-and-comments.md) で追加済み
 - [ ] 公開運用に合わせて利用者別レート制限 / 帯域割当、アカウント停止と既存配信接続の切断を設計する — [ADR 0019](decisions/0019-authenticated-site.md)。現在は X ログイン成功者が利用可、視聴の同時接続数を制限
 
 ### 保守
@@ -33,6 +33,14 @@
 
 ## 完了
 
+- [x] 2026-09-14 サイトを白基調・スマホ向けメニューに調整し、ぺからいぶを参考に文字情報・YP アイコン・カード全体リンクを追加。YP4G ジャンル制御部分を表示から除去 — [表示調整](reviews/2026-09-14-site-white-channel-info.md)、[ジャンル規則](reviews/2026-09-14-site-genre-controls.md)、[セッション引き継ぎ](handoffs/2026-09-14.md)
+
+- [x] 一覧 `/`・個別視聴・配信・管理 `/admin` を分離し、自動再生と掲示板閲覧を追加。管理パネルの配信開始・キー発行を削除 — [ADR 0022](decisions/0022-viewing-pages-and-comments.md)
+
+- [x] `updateYPChannels`・YP カタログとサイト一覧の統合・認証付きオンデマンド中継 — [ADR 0021](decisions/0021-yp-channel-directory.md)、[検証記録](reviews/2026-09-14-yp-directory.md)
+
+- [x] 2026-09-14 X 登録前の loopback 限定開発ログイン — [ADR 0020](decisions/0020-local-development-login.md)、[検証](reviews/2026-09-14-development-login.md)。通常セッション・CSRF・所有権と公開 PCP を維持
+- [x] 2026-09-14 localhost:5173/watch の開発 API 転送と HTML 応答エラーを修正 — [検証記録](reviews/2026-09-14-site-dev-proxy.md)。実 X 設定・公開環境検証は引き続き未着手
 - [x] 2026-09-14 X 認証付き視聴・配信サイトの初期実装、RTMP のキー入りログ除去、キー保存の並行更新・失敗時処理を修正 — [実装・検証記録](reviews/2026-09-14-site-implementation.md)、[ADR 0019](decisions/0019-authenticated-site.md)。公開 PCP は維持。実環境の認証・配信検証は未着手欄
 - [x] 2026-09-14 3 実装の比較と理由のない差異の修正 — [修正・検証結果](reviews/2026-09-14-comparison-corrections.md)、[ADR 0018](decisions/0018-comparison-corrections.md)。実機相互接続は未着手欄に分離
 

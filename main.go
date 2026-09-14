@@ -92,6 +92,9 @@ func main() {
 			os.Exit(1)
 		}
 		listener.ViewerToken = website.ViewerToken()
+		if cfg.Site.DevLogin {
+			slog.Warn("site: DEVELOPMENT LOGIN enabled; keep the site and Vite private", "origin", cfg.Site.Origin)
+		}
 	}
 	if err := listener.Listen(); err != nil {
 		slog.Error("output: listen failed", "err", err)
@@ -162,6 +165,7 @@ func main() {
 	listener.SetAPIHandler(apiServer.Handler())
 	slog.Info("api: JSON-RPC ready", "port", cfg.PeercastPort)
 	if website != nil {
+		website.SetCatalog(apiServer.Catalog())
 		website.SetBump(func() {
 			if ypBumper != nil {
 				ypBumper.Bump()

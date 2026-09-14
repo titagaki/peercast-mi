@@ -9,7 +9,7 @@ import {
   type ChannelEntry,
   type RelayTreeNode,
 } from "./api";
-import { BroadcastDialog, EditChannelDialog } from "./ChannelDialogs";
+import { EditChannelDialog } from "./ChannelDialogs";
 import { Notice, Refresh, Secret, TableArea } from "./components";
 import { useAction, useResource } from "./hooks";
 
@@ -288,7 +288,6 @@ export function ChannelsPage() {
   const channels = useResource(getChannels, 30000);
   const entries = channels.data ?? [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [broadcasting, setBroadcasting] = useState(false);
   const action = useAction();
   const selected = entries.find((entry) => entry.channelId === selectedId);
   const disabled = action.busy || channels.loading || !!channels.error;
@@ -302,9 +301,6 @@ export function ChannelsPage() {
             配信とリレーを管理します。30 秒ごとに自動更新。
           </p>
         </div>
-        <button className="primary" onClick={() => setBroadcasting(true)}>
-          ＋ 配信を開始
-        </button>
       </header>
       <div className="summary-grid">
         <div>
@@ -485,12 +481,6 @@ export function ChannelsPage() {
           entry={selected}
           onUpdated={channels.reload}
           onClose={() => setSelectedId(null)}
-        />
-      )}
-      {broadcasting && (
-        <BroadcastDialog
-          onClose={() => setBroadcasting(false)}
-          onCreated={channels.reload}
         />
       )}
     </section>

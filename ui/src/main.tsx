@@ -6,6 +6,6 @@ import SiteApp from "./SiteApp.tsx";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {window.location.pathname === "/watch" ? <SiteApp /> : <App />}
+    {/^\/admin\/?$/.test(window.location.pathname) ? <App /> : <SiteApp />}
   </StrictMode>,
 );

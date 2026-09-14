@@ -7,6 +7,7 @@ require (
 	github.com/titagaki/peercast-pcp v0.3.1
 	github.com/yutopp/go-amf0 v0.1.0
 	github.com/yutopp/go-rtmp v0.0.7
+	golang.org/x/text v0.31.0
 )
 
 require (

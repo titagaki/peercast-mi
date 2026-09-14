@@ -1,6 +1,7 @@
 package jsonrpc
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
+	"github.com/titagaki/peercast-mi/internal/catalog"
 	"github.com/titagaki/peercast-mi/internal/channel"
 	"github.com/titagaki/peercast-mi/internal/config"
 )
@@ -34,6 +36,7 @@ type ChannelManager interface {
 
 // Server handles JSON-RPC 2.0 requests at POST /api/1.
 type Server struct {
+	catalog   *catalog.Catalog
 	sessionID pcp.GnuID
 	mgr       ChannelManager
 	cfg       *config.Config
@@ -43,12 +46,16 @@ type Server struct {
 // New creates a new JSON-RPC Server.
 func New(sessionID pcp.GnuID, mgr ChannelManager, cfg *config.Config, ypClient YPBumper) *Server {
 	return &Server{
+		catalog:   catalog.New(cfg.YPs),
 		sessionID: sessionID,
 		mgr:       mgr,
 		cfg:       cfg,
 		ypClient:  ypClient,
 	}
 }
+
+// Catalog is shared with the unprivileged site; it contains no admin secrets.
+func (s *Server) Catalog() *catalog.Catalog { return s.catalog }
 
 // Handler returns an http.Handler for POST /api/1.
 func (s *Server) Handler() http.Handler {
@@ -219,6 +226,12 @@ func (s *Server) dispatch(method string, params json.RawMessage) (interface{}, *
 		return s.stopChannelConnection(params)
 	case "getYellowPages":
 		return s.getYellowPages()
+	case "updateYPChannels":
+		rows, _, err := s.catalog.Update(context.Background())
+		if err != nil {
+			return nil, &rpcError{Code: errCodeInternal, Message: "YP directory update failed"}
+		}
+		return rows, nil
 	case "getChannelRelayTree":
 		return s.withChannel(params, s.getChannelRelayTree)
 	default:

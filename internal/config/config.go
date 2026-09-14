@@ -12,8 +12,9 @@ import (
 )
 
 type YP struct {
-	Name string `toml:"name"`
-	Addr string `toml:"addr"`
+	ChannelsURL string `toml:"channels_url"`
+	Name        string `toml:"name"`
+	Addr        string `toml:"addr"`
 }
 
 // HostPort returns the "host:port" string for use with pcp.Dial.
@@ -79,6 +80,8 @@ type Config struct {
 
 // Site is opt-in; secrets are read from the named process environment variables.
 type Site struct {
+	MaxRelayChannels  int    `toml:"max_relay_channels"`
+	DevLogin          bool   `toml:"dev_login"`
 	Enabled           bool   `toml:"enabled"`
 	Listen            string `toml:"listen"`
 	Origin            string `toml:"origin"`
