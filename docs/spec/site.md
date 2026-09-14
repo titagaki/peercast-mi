@@ -2,6 +2,16 @@
 
 `site.enabled = true` で Go プロセス内の `internal/site` を起動する。無効が既定。管理コンソールとは別の HTTP 入口を使い、利用者向けの一覧は `/`、視聴は `/channels/<32桁ID>`、配信は `/broadcast`、管理 UI は `/admin`。管理 JSON-RPC は公開しない。
 
+## サブパスへの配置
+
+`site.base_path` は既定の空文字でルート配置、`"/mi"` なら `/mi/` 配置になる。以下のページ・API・認証パスは base_path を省略した表記で、設定時はすべてその接頭辞を付ける。`site.origin` は `https://yayaue.me` のようなオリジンのままとする。
+
+base_path は `/` から始まり、各要素が英数字・`_`・`-` のみのパス。末尾 `/`、空要素、ドット要素、クエリ・エスケープ表現を受け付けない。`/mi` 自体への GET は `/mi/` へ 308 を返す。設定した接頭辞の外ではサイトのルートを提供しない。
+
+UI は `ui/` で `PEERCAST_SITE_BASE_PATH=/mi npm run build` として同じパスでビルドする。開発サーバーにも同じ環境変数を指定する。リンク、アセット、API、映像 URL にこのパスを使う。X の callback 登録は `https://yayaue.me/mi/auth/x/callback`。ログイン後の `next` は接頭辞を含むサイト内ページのみ受理し、その他は `/mi/` に戻す。セッション・OAuth cookie の Path は `/mi/`（ルート配置時は `/`）。削除時も同じ Path を使う。Origin・CSRF 検証は引き続きオリジン単位。
+
+リバースプロキシは `/mi` と `/mi/*` をサイト専用待受へ転送し、接頭辞を削らない。管理 JSON-RPC は転送しない。Dockerfile は UI をビルドして同梱し、build arg `PEERCAST_SITE_BASE_PATH`（既定空文字）でパスを指定する。実行ユーザーは UID/GID 10001。`/config` はこのユーザーが書き込めるようにマウントし、設定と同じディレクトリの `broadcast_id`・`stream_keys.json` を永続化する。
+
 ## 有効化
 
 以下は通常の X 認証モードの手順。X 登録前のローカル確認は次の「開発用ログイン」を使う。
@@ -39,6 +49,7 @@ max_viewers_per_user = 2
 |:--|:--|
 | `listen` | サイト HTTP の bind 先。省略時 `127.0.0.1:8080` |
 | `origin` | ブラウザーから見える公開オリジン。必須。パスなしの HTTPS。開発時だけ loopback の HTTP も可 |
+| `base_path` | 公開パスの接頭辞。既定空文字、例 `/mi`。UI のビルド設定と一致させる |
 | `ui_dir` | Vite build 出力。省略時 `ui/dist`。相対パスはプロセスの作業ディレクトリ基準 |
 | `rtmp_url` | 利用者へ表示する RTMP(S) アプリケーション URL。必須。Go の待受先を変更する設定ではない |
 | `max_viewers` | サイト全体の同時メディア接続数。省略 / 0 は 20。負数は起動エラー |

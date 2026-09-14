@@ -1,3 +1,4 @@
+import { siteURL } from "./site-path";
 export type SiteUser = { id: string; name: string };
 export type SiteSession = {
   user: SiteUser | null;
@@ -43,7 +44,7 @@ export async function siteAPI<T>(
     signal?: AbortSignal;
   } = {},
 ): Promise<T> {
-  const response = await fetch(`/site/api/${path}`, {
+  const response = await fetch(siteURL(`/site/api/${path}`), {
     method: options.method ?? "GET",
     credentials: "same-origin",
     headers: {

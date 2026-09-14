@@ -151,74 +151,79 @@ func TestKeySaveFailure(t *testing.T) {
 	}
 }
 func TestOAuthPKCECallbackAndReplay(t *testing.T) {
-	s := testSite(t)
-	w := call(s, "GET", "/auth/x/start?next=/channels/0123456789abcdef0123456789abcdef", "", "", "")
-	if w.Code != 302 {
-		t.Fatal(w.Code)
-	}
-	u, _ := url.Parse(w.Header().Get("Location"))
-	q := u.Query()
-	if q.Get("code_challenge_method") != "S256" || len(q.Get("code_challenge")) != 43 {
-		t.Fatal(q)
-	}
-	var cookie *http.Cookie
-	for _, c := range w.Result().Cookies() {
-		if c.Name == flowCookie {
-			cookie = c
-		}
-	}
-	if cookie == nil || !cookie.Secure || !cookie.HttpOnly {
-		t.Fatal("unsafe flow cookie")
-	}
-	f := s.flows[cookie.Value]
-	calls := 0
-	s.client.Transport = transportFunc(func(r *http.Request) (*http.Response, error) {
-		calls++
-		body := `{"data":{"id":"1234","name":"Changed display name"}}`
-		if r.URL.String() == s.tokenURL {
-			r.ParseForm()
-			if r.Form.Get("code_verifier") != f.Verifier || r.Form.Get("redirect_uri") != s.cfg.Origin+"/auth/x/callback" {
-				t.Error("PKCE/callback mismatch")
+	for _, base := range []string{"", "/mi"} {
+		t.Run("base="+base, func(t *testing.T) {
+			s := testSite(t)
+			s.cfg.BasePath = base
+			w := call(s, "GET", base+"/auth/x/start?next="+base+"/channels/0123456789abcdef0123456789abcdef", "", "", "")
+			if w.Code != 302 {
+				t.Fatal(w.Code)
 			}
-			id, secret, _ := r.BasicAuth()
-			if id != "test-client" || secret != "test-secret" {
-				t.Error("client auth mismatch")
+			u, _ := url.Parse(w.Header().Get("Location"))
+			q := u.Query()
+			if q.Get("code_challenge_method") != "S256" || len(q.Get("code_challenge")) != 43 {
+				t.Fatal(q)
 			}
-			body = `{"access_token":"provider-secret","token_type":"bearer"}`
-		} else if r.Header.Get("Authorization") != "Bearer provider-secret" {
-			t.Error("missing user token")
-		}
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
-	})
-	r := httptest.NewRequest("GET", "/auth/x/callback?state="+q.Get("state")+"&code=code", nil)
-	r.AddCookie(cookie)
-	w = httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
-	if w.Code != 303 || calls != 2 {
-		t.Fatal(w.Code, w.Body.String(), calls)
-	}
-	if w.Header().Get("Location") != "/channels/0123456789abcdef0123456789abcdef" {
-		t.Fatal("login did not return to channel", w.Header().Get("Location"))
-	}
-	var sid string
-	for _, c := range w.Result().Cookies() {
-		if c.Name == sessionCookie {
-			sid = c.Value
-			if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode {
-				t.Fatal("unsafe session")
+			var cookie *http.Cookie
+			for _, c := range w.Result().Cookies() {
+				if c.Name == flowCookie {
+					cookie = c
+				}
 			}
-		}
-	}
-	if s.sessions[sid] == nil || s.sessions[sid].User.ID != "1234" {
-		t.Fatal("no session")
-	}
-	if strings.Contains(w.Body.String(), "provider-secret") {
-		t.Fatal("token leaked")
-	}
-	w = httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
-	if w.Code != 400 || calls != 2 {
-		t.Fatal("callback replay accepted")
+			if cookie == nil || cookie.Path != base+"/" || !cookie.Secure || !cookie.HttpOnly {
+				t.Fatal("unsafe flow cookie")
+			}
+			f := s.flows[cookie.Value]
+			calls := 0
+			s.client.Transport = transportFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				body := `{"data":{"id":"1234","name":"Changed display name"}}`
+				if r.URL.String() == s.tokenURL {
+					r.ParseForm()
+					if r.Form.Get("code_verifier") != f.Verifier || r.Form.Get("redirect_uri") != s.cfg.Origin+base+"/auth/x/callback" {
+						t.Error("PKCE/callback mismatch")
+					}
+					id, secret, _ := r.BasicAuth()
+					if id != "test-client" || secret != "test-secret" {
+						t.Error("client auth mismatch")
+					}
+					body = `{"access_token":"provider-secret","token_type":"bearer"}`
+				} else if r.Header.Get("Authorization") != "Bearer provider-secret" {
+					t.Error("missing user token")
+				}
+				return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			})
+			r := httptest.NewRequest("GET", base+"/auth/x/callback?state="+q.Get("state")+"&code=code", nil)
+			r.AddCookie(cookie)
+			w = httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != 303 || calls != 2 {
+				t.Fatal(w.Code, w.Body.String(), calls)
+			}
+			if w.Header().Get("Location") != base+"/channels/0123456789abcdef0123456789abcdef" {
+				t.Fatal("login did not return to channel", w.Header().Get("Location"))
+			}
+			var sid string
+			for _, c := range w.Result().Cookies() {
+				if c.Name == sessionCookie {
+					sid = c.Value
+					if c.Path != base+"/" || !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteLaxMode {
+						t.Fatal("unsafe session")
+					}
+				}
+			}
+			if s.sessions[sid] == nil || s.sessions[sid].User.ID != "1234" {
+				t.Fatal("no session")
+			}
+			if strings.Contains(w.Body.String(), "provider-secret") {
+				t.Fatal("token leaked")
+			}
+			w = httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, r)
+			if w.Code != 400 || calls != 2 {
+				t.Fatal("callback replay accepted")
+			}
+		})
 	}
 }
 func TestOAuthRejectsInvalidStateAndProviderFailure(t *testing.T) {

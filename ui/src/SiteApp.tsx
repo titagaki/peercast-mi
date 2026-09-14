@@ -1,3 +1,4 @@
+import { siteURL, sitePath } from "./site-path";
 import { useEffect, useRef, useState } from "react";
 import { Notice, Secret } from "./components";
 import { useAction, useResource } from "./hooks";
@@ -36,7 +37,7 @@ export default function SiteApp() {
           </span>
           <div>
             <h1>
-              <a className="site-brand" href="/">
+              <a className="site-brand" href={siteURL("/")}>
                 peercast-mi live
               </a>
             </h1>
@@ -91,7 +92,9 @@ export default function SiteApp() {
             ) : (
               <a
                 className="site-login"
-                href={`/auth/x/start?next=${encodeURIComponent(window.location.pathname)}`}
+                href={siteURL(
+                  `/auth/x/start?next=${encodeURIComponent(window.location.pathname)}`,
+                )}
               >
                 X でログイン
               </a>
@@ -104,7 +107,7 @@ export default function SiteApp() {
       </main>
       <footer className="site-footer">
         <span>peercast-mi</span>
-        <a href="/admin">管理パネル</a>
+        <a href={siteURL("/admin")}>管理パネル</a>
       </footer>
     </div>
   );
@@ -179,16 +182,14 @@ function SiteMenu({
       >
         <p>{session.user?.name} さん</p>
         <a
-          href="/"
-          aria-current={window.location.pathname === "/" ? "page" : undefined}
+          href={siteURL("/")}
+          aria-current={sitePath() === "/" ? "page" : undefined}
         >
           チャンネル一覧
         </a>
         <a
-          href="/broadcast"
-          aria-current={
-            window.location.pathname === "/broadcast" ? "page" : undefined
-          }
+          href={siteURL("/broadcast")}
+          aria-current={sitePath() === "/broadcast" ? "page" : undefined}
         >
           配信する
         </a>
@@ -210,7 +211,7 @@ function SiteMenu({
 }
 
 function SignedIn({ session }: { session: SiteSession }) {
-  const path = window.location.pathname;
+  const path = sitePath();
   const match = /^\/channels\/([a-fA-F0-9]{32})\/?$/.exec(path);
   return (
     <>
@@ -222,7 +223,7 @@ function SignedIn({ session }: { session: SiteSession }) {
         <ChannelList />
       ) : (
         <p>
-          ページが見つかりません。<a href="/">チャンネル一覧へ</a>
+          ページが見つかりません。<a href={siteURL("/")}>チャンネル一覧へ</a>
         </p>
       )}
     </>
@@ -270,7 +271,7 @@ function ChannelList() {
           <a
             className="panel site-channel-card"
             key={c.id}
-            href={`/channels/${c.id}`}
+            href={siteURL(`/channels/${c.id}`)}
             aria-label={c.name || "名前なし"}
           >
             <SiteChannelInfo channel={c} />
@@ -286,7 +287,7 @@ function WatchPage({ id }: { id: string }) {
   const current = channels.data?.channels.find((c) => c.id === id);
   return (
     <>
-      <a className="site-back" href="/">
+      <a className="site-back" href={siteURL("/")}>
         ← チャンネル一覧
       </a>
       <Notice error={channels.error} />

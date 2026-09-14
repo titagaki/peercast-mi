@@ -33,6 +33,8 @@ peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp
 
 ## reviews/
 
+- [2026-09-14-site-base-path.md](reviews/2026-09-14-site-base-path.md) — `/mi/` 配置、OAuth・UI・Dockerとインフラ設定のローカル検証
+
 - [2026-09-14-site-genre-controls.md](reviews/2026-09-14-site-genre-controls.md) — YP4G ジャンル資料とサイト表示の制御部分除去
 
 - [2026-09-14-site-white-channel-info.md](reviews/2026-09-14-site-white-channel-info.md) — 白基調、ぺからいぶを参考にした文字情報・YP アイコンと検証

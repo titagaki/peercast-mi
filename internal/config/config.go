@@ -85,6 +85,7 @@ type Site struct {
 	Enabled           bool   `toml:"enabled"`
 	Listen            string `toml:"listen"`
 	Origin            string `toml:"origin"`
+	BasePath          string `toml:"base_path"`
 	UIDir             string `toml:"ui_dir"`
 	RTMPURL           string `toml:"rtmp_url"`
 	MaxViewers        int    `toml:"max_viewers"`

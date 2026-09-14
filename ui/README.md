@@ -92,3 +92,7 @@ Playwright はテスト専用 Vite (127.0.0.1:4173、strictPort) を起動し、
 現在の仕様は [UI 仕様](../docs/spec/ui.md)、今回の検証結果は [UI 改善記録](../docs/reviews/2026-09-14-ui-improvements.md) を参照。
 
 `test:proxy` はブラウザーの模擬応答とは別に、実 Vite と模擬 HTTP バックエンドを空きポートで起動し、API / OAuth / 映像の転送、ヘッダー保持、管理 API の非転送、バックエンド停止時の応答を検証する。
+
+## `/mi/` への配置
+
+Go の `[site]` に `base_path = "/mi"` を設定し、UI は `PEERCAST_SITE_BASE_PATH=/mi npm run build` でビルドします。開発時は同じ変数を `npm run dev` に渡し、`/mi/` を開きます。`site.origin` はパスを含めません。X callback とプロキシの指定は [サイト仕様](../docs/spec/site.md#サブパスへの配置) を参照してください。

@@ -1,3 +1,4 @@
+import { siteURL } from "./site-path";
 import { useEffect, useRef, useState } from "react";
 import mpegts from "mpegts.js";
 import type { SiteChannel } from "./site-api";
@@ -20,7 +21,7 @@ export function SitePlayer({ channel }: { channel: SiteChannel }) {
       {
         type: "flv",
         isLive: true,
-        url: `/site/stream/${channel.id}`,
+        url: siteURL(`/site/stream/${channel.id}`),
         withCredentials: true,
       },
       { enableWorker: false },

@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+config.toml
+broadcast_id
+stream_keys.json
+ui/node_modules
+ui/dist
+ui/test-results
+ui/playwright-report
+ui/.env*

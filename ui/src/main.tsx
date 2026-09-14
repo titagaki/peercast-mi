@@ -1,3 +1,4 @@
+import { sitePath } from "./site-path";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
@@ -6,6 +7,6 @@ import SiteApp from "./SiteApp.tsx";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {/^\/admin\/?$/.test(window.location.pathname) ? <App /> : <SiteApp />}
+    {/^\/admin\/?$/.test(sitePath()) ? <App /> : <SiteApp />}
   </StrictMode>,
 );

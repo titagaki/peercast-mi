@@ -25,14 +25,21 @@ export default defineConfig(({ mode }) => {
       });
     },
   };
+  const base = env.PEERCAST_SITE_BASE_PATH || "";
+  if (base && !/^(\/[A-Za-z0-9_-]+)+$/.test(base)) {
+    throw new Error(
+      "PEERCAST_SITE_BASE_PATH must be a path such as /mi without a trailing slash",
+    );
+  }
   return {
+    base: `${base}/`,
     plugins: [react()],
     server: {
       // OAuth callbacks must not silently move to another port.
       port: 5173,
       strictPort: true,
       // Do not proxy the administrative /api/1 endpoint.
-      proxy: { "/site/": siteProxy, "/auth/": siteProxy },
+      proxy: { [`${base}/site/`]: siteProxy, [`${base}/auth/`]: siteProxy },
     },
   };
 });

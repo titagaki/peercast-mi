@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +83,9 @@ func New(cfg config.Site, mgr *channel.Manager, backendPort int, bump func()) (*
 	}
 	if cfg.MaxRelayChannels == 0 {
 		cfg.MaxRelayChannels = 8
+	}
+	if cfg.BasePath != "" && !regexp.MustCompile(`^(/[A-Za-z0-9_-]+)+$`).MatchString(cfg.BasePath) {
+		return nil, errors.New("site.base_path must be empty or slash-prefixed segments of letters, digits, underscores or hyphens without a trailing slash")
 	}
 	u, err := url.Parse(cfg.Origin)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
@@ -154,7 +158,7 @@ func (s *Server) SetBump(bump func()) { s.bump = bump }
 func (s *Server) SetCatalog(c *catalog.Catalog) { s.catalog = c }
 
 func (s *Server) cookie(w http.ResponseWriter, name, value string, maxAge int) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", MaxAge: maxAge, HttpOnly: true, Secure: strings.HasPrefix(s.cfg.Origin, "https://"), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: s.cfg.BasePath + "/", MaxAge: maxAge, HttpOnly: true, Secure: strings.HasPrefix(s.cfg.Origin, "https://"), SameSite: http.SameSiteLaxMode})
 }
 func reply(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -189,13 +193,27 @@ func (s *Server) authenticate(r *http.Request) *session {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	if s.cfg.DevLogin {
-		mux.HandleFunc("POST /site/api/dev-login", s.developmentLogin)
-	} else {
-		mux.HandleFunc("GET /auth/x/start", s.login)
-		mux.HandleFunc("GET /auth/x/callback", s.callback)
+	handle := func(pattern string, h http.Handler) {
+		method, path, _ := strings.Cut(pattern, " ")
+		mux.Handle(method+" "+s.cfg.BasePath+path, h)
 	}
-	mux.HandleFunc("GET /site/api/me", func(w http.ResponseWriter, r *http.Request) {
+	handleFunc := func(pattern string, h http.HandlerFunc) { handle(pattern, h) }
+	if s.cfg.BasePath != "" {
+		mux.HandleFunc("GET "+s.cfg.BasePath, func(w http.ResponseWriter, r *http.Request) {
+			target := s.cfg.BasePath + "/"
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusPermanentRedirect)
+		})
+	}
+	if s.cfg.DevLogin {
+		handleFunc("POST /site/api/dev-login", s.developmentLogin)
+	} else {
+		handleFunc("GET /auth/x/start", s.login)
+		handleFunc("GET /auth/x/callback", s.callback)
+	}
+	handleFunc("GET /site/api/me", func(w http.ResponseWriter, r *http.Request) {
 		ss := s.authenticate(r)
 		if ss == nil {
 			reply(w, map[string]any{"user": nil, "devLogin": s.cfg.DevLogin})
@@ -204,7 +222,7 @@ func (s *Server) Handler() http.Handler {
 		reply(w, map[string]any{"user": ss.User, "csrf": ss.CSRF, "devLogin": s.cfg.DevLogin})
 	})
 	protected := func(pattern string, h func(http.ResponseWriter, *http.Request, *session)) {
-		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		handleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			ss := s.authenticate(r)
 			if ss == nil {
 				http.Error(w, "X ログインが必要です。", 401)
@@ -227,22 +245,27 @@ func (s *Server) Handler() http.Handler {
 	protected("DELETE /site/api/broadcast", s.stopBroadcast)
 	protected("GET /site/stream/{id}", s.stream)
 	// Serve only the compiled UI, never project files or the administrative API.
-	mux.Handle("GET /assets/", http.FileServer(http.Dir(s.cfg.UIDir)))
+	handleFunc("GET /favicon.svg", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(s.cfg.UIDir, "favicon.svg"))
+	})
+	handle("GET /assets/", http.StripPrefix(s.cfg.BasePath, http.FileServer(http.Dir(s.cfg.UIDir))))
 	page := func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(s.cfg.UIDir, "index.html"))
 	}
-	mux.HandleFunc("GET /{$}", page)
-	mux.HandleFunc("GET /channels/{id}", func(w http.ResponseWriter, r *http.Request) {
+	handleFunc("GET /{$}", page)
+	handleFunc("GET /channels/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := parseID(r.PathValue("id")); err != nil {
 			http.NotFound(w, r)
 			return
 		}
 		page(w, r)
 	})
-	mux.HandleFunc("GET /broadcast", page)
-	mux.HandleFunc("GET /admin", page)
-	mux.HandleFunc("GET /admin/{$}", page)
-	mux.HandleFunc("GET /watch", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/", http.StatusFound) })
+	handleFunc("GET /broadcast", page)
+	handleFunc("GET /admin", page)
+	handleFunc("GET /admin/{$}", page)
+	handleFunc("GET /watch", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, s.cfg.BasePath+"/", http.StatusFound)
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -277,12 +300,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		delete(s.flows, c.Value)
 	}
 	id := randomToken()
-	f := flow{randomToken(), randomToken(), time.Now().Add(5 * time.Minute), safeReturnPath(r.URL.Query().Get("next"))}
+	f := flow{randomToken(), randomToken(), time.Now().Add(5 * time.Minute), s.returnPath(r.URL.Query().Get("next"))}
 	s.flows[id] = f
 	s.mu.Unlock()
 	s.cookie(w, flowCookie, id, 300)
 	hash := sha256.Sum256([]byte(f.Verifier))
-	q := url.Values{"response_type": {"code"}, "client_id": {s.clientID}, "redirect_uri": {s.cfg.Origin + "/auth/x/callback"}, "scope": {"tweet.read users.read"}, "state": {f.State}, "code_challenge": {base64.RawURLEncoding.EncodeToString(hash[:])}, "code_challenge_method": {"S256"}}
+	q := url.Values{"response_type": {"code"}, "client_id": {s.clientID}, "redirect_uri": {s.cfg.Origin + s.cfg.BasePath + "/auth/x/callback"}, "scope": {"tweet.read users.read"}, "state": {f.State}, "code_challenge": {base64.RawURLEncoding.EncodeToString(hash[:])}, "code_challenge_method": {"S256"}}
 	http.Redirect(w, r, "https://x.com/i/oauth2/authorize?"+q.Encode(), http.StatusFound)
 }
 
@@ -307,7 +330,7 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.startSession(w, r, u) {
-		http.Redirect(w, r, safeReturnPath(f.Next), http.StatusSeeOther)
+		http.Redirect(w, r, s.returnPath(f.Next), http.StatusSeeOther)
 	}
 }
 
@@ -344,7 +367,7 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u user) bo
 }
 
 func (s *Server) exchange(ctx context.Context, code, verifier string) (user, error) {
-	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {s.cfg.Origin + "/auth/x/callback"}, "code_verifier": {verifier}}
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {s.cfg.Origin + s.cfg.BasePath + "/auth/x/callback"}, "code_verifier": {verifier}}
 	req, err := http.NewRequestWithContext(ctx, "POST", s.tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return user{}, err
@@ -457,4 +480,15 @@ func parseID(value string) (pcp.GnuID, error) {
 	}
 	copy(id[:], b)
 	return id, nil
+}
+
+// returnPath accepts only public pages under this site's configured mount point.
+func (s *Server) returnPath(value string) string {
+	if s.cfg.BasePath != "" {
+		if !strings.HasPrefix(value, s.cfg.BasePath+"/") {
+			return s.cfg.BasePath + "/"
+		}
+		value = strings.TrimPrefix(value, s.cfg.BasePath)
+	}
+	return s.cfg.BasePath + safeReturnPath(value)
 }
