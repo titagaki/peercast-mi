@@ -45,6 +45,7 @@ peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp
 
 - [2026-09-14-site-base-path.md](reviews/2026-09-14-site-base-path.md) — `/mi/` 配置、OAuth・UI・Dockerとインフラ設定のローカル検証
 
+- [2026-09-15-audit-design-0yp.md](reviews/2026-09-15-audit-design-0yp.md) — ログイン・配信履歴設計に向けた0ypのスキーマ・recorder比較
 - [2026-09-15-broadcast-track-creator.md](reviews/2026-09-15-broadcast-track-creator.md) — pcgw の作成元IP設定とプロキシ経由のIP判定
 - [2026-09-15-broadcast-form.md](reviews/2026-09-15-broadcast-form.md) — pcgw を参考にしたチャンネル作成・履歴・新スレ移動
 - [2026-09-14-site-genre-controls.md](reviews/2026-09-14-site-genre-controls.md) — YP4G ジャンル資料とサイト表示の制御部分除去
@@ -65,3 +66,7 @@ peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp
 
 - [2026-09-14-implementation-comparison.md](reviews/2026-09-14-implementation-comparison.md) — PeerCastStation・peercast-yt・peercast-mi の実装比較。意図的な差異と理由、残る差異、過去の互換性ノートの再評価、再現チェック
 - [2026-09-14-comparison-corrections.md](reviews/2026-09-14-comparison-corrections.md) — 比較後の修正状況、維持する差異の理由、回帰テスト、運用上の注意
+
+## 設計案（未実装）
+
+- [ログイン・配信履歴のMariaDB保存](design/site-audit.md) — イベント、配信履歴、受信区間、障害時処理と [DDL案](design/site-audit-schema.sql)
