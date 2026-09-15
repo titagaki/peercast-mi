@@ -112,12 +112,18 @@ export function Modal({
   );
 }
 
-export function Secret({ value }: { value: string }) {
+export function Secret({
+  value,
+  maskLength = 16,
+}: {
+  value: string;
+  maskLength?: number;
+}) {
   const [visible, setVisible] = useState(false);
   const [message, setMessage] = useState("");
   return (
     <div className="secret">
-      <code>{visible ? value : "••••••••••••••••"}</code>
+      <code>{visible ? value : "•".repeat(maskLength)}</code>
       <div className="actions">
         <button
           type="button"

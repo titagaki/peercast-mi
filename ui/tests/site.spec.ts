@@ -533,7 +533,7 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
       return route.fulfill({ json: { ok: true } });
     }
     if (path.endsWith("/key")) {
-      key = "my-secret-key";
+      key = "ab1234";
       return route.fulfill({ json: { streamKey: key } });
     }
     if (path.endsWith("/broadcast")) {
@@ -574,7 +574,12 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
   await page
     .getByRole("button", { name: "配信キーを発行", exact: true })
     .click();
-  await expect(page.getByText("my-secret-key", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("ab1234", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".secret code")).toHaveText("••••••");
+  await page.getByRole("button", { name: "表示", exact: true }).click();
+  await expect(page.locator(".secret code")).toHaveText("ab1234");
+  await page.getByRole("button", { name: "隠す", exact: true }).click();
+  await expect(page.locator(".secret code")).toHaveText("••••••");
   await page
     .getByRole("textbox", { name: "チャンネル名", exact: true })
     .fill("My live");

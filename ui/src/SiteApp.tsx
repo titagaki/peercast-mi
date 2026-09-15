@@ -362,7 +362,11 @@ function Broadcast({ csrf }: { csrf: string }) {
           {own.data.streamKey && (
             <>
               <h3>あなたの配信キー</h3>
-              <Secret key={own.data.streamKey} value={own.data.streamKey} />
+              <Secret
+                key={own.data.streamKey}
+                value={own.data.streamKey}
+                maskLength={own.data.streamKey.length}
+              />
               <p className="muted">
                 他の人には渡さないでください。ログアウトしても配信キーは有効です。
               </p>
