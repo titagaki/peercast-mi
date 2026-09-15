@@ -327,6 +327,55 @@ function Broadcast({ csrf }: { csrf: string }) {
       </button>
       {own.data && (
         <>
+          <section
+            className="broadcast-connection"
+            aria-label="配信ソフトの設定"
+          >
+            <p className="broadcast-connection-help">
+              作成後、以下をOBSなどに設定して配信を開始してください。
+            </p>
+            <dl className="broadcast-connection-fields">
+              <div>
+                <dt>配信先</dt>
+                <dd>
+                  <code>{own.data.rtmpUrl}</code>
+                </dd>
+              </div>
+              <div>
+                <dt>配信キー</dt>
+                <dd>
+                  {own.data.streamKey ? (
+                    <Secret
+                      key={own.data.streamKey}
+                      value={own.data.streamKey}
+                      maskLength={own.data.streamKey.length}
+                    />
+                  ) : (
+                    <span className="muted">未発行</span>
+                  )}
+                  <p className="muted">キーは他の人に教えないでください。</p>
+                  <button
+                    disabled={action.busy || own.loading || !!own.data.channel}
+                    onClick={() => {
+                      if (
+                        own.data?.streamKey &&
+                        !window.confirm(
+                          "以前のキーは使えなくなります。再発行しますか？",
+                        )
+                      )
+                        return;
+                      void action.run(async () => {
+                        await siteAPI("key", { method: "POST", csrf });
+                        own.reload();
+                      }, "配信キーを発行しました。");
+                    }}
+                  >
+                    {own.data.streamKey ? "配信キーを再発行" : "配信キーを発行"}
+                  </button>
+                </dd>
+              </div>
+            </dl>
+          </section>
           {!own.data.channel && (
             <BroadcastForm
               history={own.data.history ?? []}
@@ -352,48 +401,6 @@ function Broadcast({ csrf }: { csrf: string }) {
               }}
             />
           )}
-          <p>
-            OBS
-            等の配信ソフトに設定してください。先に配信枠を作成し、その後ソフトで配信を開始します。
-          </p>
-          <p>
-            配信先: <code>{own.data.rtmpUrl}</code>
-          </p>
-          {own.data.streamKey && (
-            <>
-              <h3>あなたの配信キー</h3>
-              <Secret
-                key={own.data.streamKey}
-                value={own.data.streamKey}
-                maskLength={own.data.streamKey.length}
-              />
-              <p className="muted">
-                他の人には渡さないでください。ログアウトしても配信キーは有効です。
-              </p>
-            </>
-          )}
-          <p className="muted">
-            新しく発行するキーは小文字の英字2文字＋数字4桁です（例:
-            ab1234）。既存のキーをこの形式に変える場合は、配信停止後に再発行してください。
-          </p>
-          <button
-            disabled={action.busy || own.loading || !!own.data.channel}
-            onClick={() => {
-              if (
-                own.data?.streamKey &&
-                !window.confirm(
-                  "以前のキーは使えなくなります。再発行しますか？",
-                )
-              )
-                return;
-              void action.run(async () => {
-                await siteAPI("key", { method: "POST", csrf });
-                own.reload();
-              }, "配信キーを発行しました。");
-            }}
-          >
-            {own.data.streamKey ? "配信キーを再発行" : "配信キーを発行"}
-          </button>
           {own.data.channel ? (
             <>
               <h3>{own.data.channel.name}</h3>

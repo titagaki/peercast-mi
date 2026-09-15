@@ -321,7 +321,8 @@ body:has(.site-app) {
   overflow-wrap: anywhere;
 }
 
-.broadcast-form {
+.broadcast-form,
+.broadcast-connection {
   max-width: 52rem;
   margin-top: 1rem;
 }
@@ -343,10 +344,60 @@ body:has(.site-app) {
   align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin: 0.25rem 0 1rem;
+  margin: 0.25rem 0 1rem calc(9rem + 0.75rem);
   overflow-wrap: anywhere;
 }
+.broadcast-connection {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.broadcast-connection-help {
+  margin-bottom: 1rem;
+}
+.broadcast-connection-fields {
+  margin: 0;
+}
+.broadcast-connection-fields > div {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+}
+.broadcast-connection-fields > div + div {
+  margin-top: 1rem;
+}
+.broadcast-connection-fields dt {
+  padding-top: 0.5rem;
+}
+.broadcast-connection-fields dd {
+  margin: 0;
+  min-width: 0;
+}
+.broadcast-connection-fields dd > code,
+.broadcast-connection-fields .secret {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.broadcast-connection-fields dd > .muted {
+  margin: 0.5rem 0;
+}
+.broadcast-connection-fields .secret > [role="status"]:empty {
+  display: none;
+}
 @media (max-width: 600px) {
+  .broadcast-board {
+    margin-left: 0;
+  }
+  .broadcast-connection-fields dt {
+    padding-top: 0;
+  }
+  .broadcast-connection-fields > div,
   .broadcast-fields label {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.3rem;

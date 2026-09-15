@@ -221,7 +221,7 @@ export function BroadcastForm({
             onMove={(url) => set("contactUrl", url)}
           />
         )}
-        <button type="submit">配信枠を作成</button>
+        <button type="submit">作成</button>
       </fieldset>
     </form>
   );

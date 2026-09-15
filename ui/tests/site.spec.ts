@@ -598,7 +598,7 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
   await expect(
     page.getByRole("spinbutton", { name: "ビットレート (kbps)" }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: "配信枠を作成", exact: true }).click();
+  await page.getByRole("button", { name: "作成", exact: true }).click();
   await expect(page.getByRole("heading", { name: "My live" })).toBeVisible();
   await expect(
     page.getByRole("status").filter({ hasText: "OBS接続待ち" }),
