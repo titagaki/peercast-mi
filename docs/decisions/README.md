@@ -42,4 +42,5 @@
 | [0027](0027-publication-genre-prefix.md) | サイト配信のジャンルに掲載用yp接頭辞を補う | 採用 |
 | [0028](0028-public-ipv4.md) | NAT内ノードの公開IPv4を明示設定できるようにする | 採用 |
 | [0029](0029-broadcast-history.md) | 配信フォームの履歴保存と掲示板参照 | 採用 |
+| [0030](0030-site-yp-listener-count.md) | 一覧・視聴ページの視聴人数は YP の値で統一する | 採用 |
 | [peercaststation-compat](peercaststation-compat.md) | PeerCastStation との挙動合わせ (複数項目) | 採用 |

@@ -212,3 +212,67 @@ func TestDirectoryExcludesUnlistedLocalBroadcast(t *testing.T) {
 		t.Fatal("owner lost broadcast", w.Body.String())
 	}
 }
+
+func TestDirectoryListenersAlwaysComeFromYP(t *testing.T) {
+	for _, mode := range []string{"broadcast", "relay"} {
+		for _, tc := range []struct {
+			raw  string
+			want int
+		}{{"42", 42}, {"0", 0}, {"-1", -1}, {"", -1}, {"unknown", -1}} {
+			t.Run(mode+"/"+tc.raw, func(t *testing.T) {
+				s := testSite(t)
+				ss := addSession(s, "alice", "1")
+				var ch *channel.Channel
+				var err error
+				if mode == "broadcast" {
+					if err = s.mgr.IssueStreamKey(account(ss), "ab1234"); err != nil {
+						t.Fatal(err)
+					}
+					ch, err = s.mgr.Broadcast("ab1234", channel.ChannelInfo{Name: "Local name"}, channel.TrackInfo{})
+				} else {
+					s.mgr.NewRelay = func(*channel.Channel, string) channel.RelayHandle { return &directoryRelay{stop: make(chan struct{})} }
+					id, e := parseID(strings.Repeat("1", 32))
+					if e != nil {
+						t.Fatal(e)
+					}
+					ch, err = s.mgr.StartRelay(id, "8.8.8.8:7144")
+					if err == nil {
+						ch.SetInfo(channel.ChannelInfo{Name: "Local name"})
+					}
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				ch.UpdateNodeStats(ch.ID, 7, 1)
+				if view(ch).Listeners != 7 {
+					t.Fatal("local count fixture not initialized")
+				}
+				yp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					io.WriteString(w, "YP name<>"+view(ch).ID+"<>8.8.8.8:7144<><><>Description<>"+tc.raw+"<>1<>1500<>FLV\n")
+				}))
+				defer yp.Close()
+				s.SetCatalog(catalog.New([]config.YP{{Name: "YP", ChannelsURL: yp.URL}}))
+				for _, endpoint := range []string{"/site/api/directory", "/site/api/channels"} {
+					w := call(s, "GET", endpoint, "alice", "", "")
+					var rows []channelView
+					if endpoint == "/site/api/directory" {
+						var result struct{ Channels []channelView }
+						err = json.Unmarshal(w.Body.Bytes(), &result)
+						rows = result.Channels
+					} else {
+						err = json.Unmarshal(w.Body.Bytes(), &rows)
+					}
+					if w.Code != 200 || err != nil || len(rows) != 1 {
+						t.Fatal(endpoint, w.Code, w.Body.String(), err)
+					}
+					if rows[0].Listeners != tc.want || rows[0].Name != "Local name" {
+						t.Fatalf("%s: got %+v, want YP listeners %d with local metadata", endpoint, rows[0], tc.want)
+					}
+				}
+				if view(ch).Listeners != 7 {
+					t.Fatal("directory changed local statistics")
+				}
+			})
+		}
+	}
+}

@@ -44,6 +44,9 @@ func (s *Server) channelList(r *http.Request) ([]channelView, []catalog.Status, 
 			// Keep directory metadata while a newly started relay awaits CHAN_INFO.
 			if local.Name != "" {
 				local.YellowPage = rows[i].YellowPage
+				// A local relay only knows its own subtree, not the whole audience.
+				// Preserve the YP count, including hidden/unknown values.
+				local.Listeners = rows[i].Listeners
 				if !ch.IsBroadcasting() {
 					local.Uptime = rows[i].Uptime
 				}
