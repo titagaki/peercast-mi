@@ -30,3 +30,5 @@
 - [サイト仕様](../spec/site.md)
 - [自動再生とミュート](https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay)
 - [Go 日本語エンコーディング](https://pkg.go.dev/golang.org/x/text/encoding/japanese)
+
+2026-09-15: チャンネル作成フォームの掲示板参照に限り、認証済みユーザーのURL入力を許可する例外を [ADR 0029](0029-broadcast-history.md) に追加。コメント閲覧APIの接続先決定は維持する。

@@ -10,7 +10,7 @@ export function channelExplanation(channel: SiteChannel) {
   const genre = channel.genre
     .trim()
     .replace(
-      /^(?:yp|sp|tp)(?:[a-zA-Z0-9]+:\??@*|\?@*|@+|(?=$|[^a-zA-Z0-9]))/,
+      /^(?:yp|sp|tp|pp)(?:[a-zA-Z0-9]+:\??@*|\?@*|@+|(?=$|[^a-zA-Z0-9]))/,
       "",
     )
     .replace(/\bgame\b/gi, "")

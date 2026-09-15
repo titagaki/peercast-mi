@@ -31,7 +31,16 @@ export type SiteDirectory = {
     updatedAt?: string;
   }[];
 };
+export type BroadcastSettings = {
+  name: string;
+  genre: string;
+  description: string;
+  comment: string;
+  contactUrl: string;
+};
+export type BroadcastHistoryEntry = BroadcastSettings & { createdAt: string };
 export type OwnBroadcast = {
+  history: BroadcastHistoryEntry[];
   streamKey: string;
   rtmpUrl: string;
   channel: SiteChannel | null;

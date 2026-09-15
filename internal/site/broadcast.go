@@ -71,7 +71,12 @@ func (s *Server) broadcastInfo(w http.ResponseWriter, r *http.Request, ss *sessi
 		v := view(ch)
 		own = &v
 	}
-	reply(w, map[string]any{"streamKey": key, "rtmpUrl": s.cfg.RTMPURL, "channel": own})
+	history, err := s.readHistory(account(ss))
+	if err != nil {
+		http.Error(w, "以前の設定を読み込めませんでした。", 500)
+		return
+	}
+	reply(w, map[string]any{"streamKey": key, "rtmpUrl": s.cfg.RTMPURL, "channel": own, "history": history})
 }
 func (s *Server) rotateKey(w http.ResponseWriter, r *http.Request, ss *session) {
 	s.mutate.Lock()
@@ -114,6 +119,7 @@ func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, ss *session) 
 	}
 	input.Name = strings.TrimSpace(input.Name)
 	input.Genre = strings.TrimSpace(input.Genre)
+	formGenre := input.Genre
 	if !strings.HasPrefix(input.Genre, "yp") {
 		input.Genre = "yp" + input.Genre
 	}
@@ -140,9 +146,19 @@ func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, ss *session) 
 		http.Error(w, "既に配信枠があります。停止後に作成してください。", 409)
 		return
 	}
+	history, err := s.readHistory(account(ss))
+	if err != nil {
+		http.Error(w, "以前の設定を読み込めませんでした。", 500)
+		return
+	}
 	ch, err := s.mgr.Broadcast(key, channel.ChannelInfo{Name: input.Name, Genre: input.Genre, Desc: input.Description, Comment: input.Comment, URL: input.ContactURL, Bitrate: uint32(input.Bitrate), Type: "FLV", MIMEType: "video/x-flv", Ext: ".flv"}, channel.TrackInfo{})
 	if err != nil {
 		http.Error(w, "配信枠を作成できませんでした。", 409)
+		return
+	}
+	if err := s.saveHistory(account(ss), broadcastSettings{input.Name, formGenre, input.Description, input.Comment, input.ContactURL}, history); err != nil {
+		s.mgr.Stop(ch.ID)
+		http.Error(w, "設定を保存できなかったため、配信枠の作成を取り消しました。", 500)
 		return
 	}
 	if s.bump != nil {

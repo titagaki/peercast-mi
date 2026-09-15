@@ -106,6 +106,13 @@ test("YP control genre syntax is presentation-only and preserves ordinary genres
     ["tp?@@@音楽", "音楽 - 真・女神転生Ⅴ Vengeance"],
     ["ypゲーム", "ゲーム - 真・女神転生Ⅴ Vengeance"],
     ["sp?", "真・女神転生Ⅴ Vengeance"],
+    ["pp?", "真・女神転生Ⅴ Vengeance"],
+    ["pp?ゲーム", "ゲーム - 真・女神転生Ⅴ Vengeance"],
+    ["ppABC:?@@音楽", "音楽 - 真・女神転生Ⅴ Vengeance"],
+    ["pp", "真・女神転生Ⅴ Vengeance"],
+    ["ppMusic", "ppMusic - 真・女神転生Ⅴ Vengeance"],
+    ["音楽 pp?", "音楽 pp? - 真・女神転生Ⅴ Vengeance"],
+    ["xp?", "xp? - 真・女神転生Ⅴ Vengeance"],
     ["sports", "sports - 真・女神転生Ⅴ Vengeance"],
     ["space", "space - 真・女神転生Ⅴ Vengeance"],
     ["Endgame", "Endgame - 真・女神転生Ⅴ Vengeance"],
@@ -137,8 +144,8 @@ test("YP controls are hidden in both channel cards and watch details", async ({
         channels: [
           {
             ...ch,
-            genre: "sp@@",
-            description: "真・女神転生Ⅴ Vengeance",
+            genre: "pp?",
+            description: "The Division2 Y8S3",
             comment: "",
             contentType: "RAW",
           },
@@ -152,14 +159,14 @@ test("YP controls are hidden in both channel cards and watch details", async ({
   );
   await page.goto("/");
   await expect(page.locator(".site-channel-description")).toHaveText(
-    "真・女神転生Ⅴ Vengeance",
+    "The Division2 Y8S3",
   );
-  await page.getByRole("searchbox").fill("sp@@");
+  await page.getByRole("searchbox").fill("pp?");
   await expect(page.locator(".site-channel-card")).toHaveCount(0);
-  await page.getByRole("searchbox").fill("女神転生");
+  await page.getByRole("searchbox").fill("Division2");
   await page.getByRole("link", { name: ch.name, exact: true }).click();
   await expect(page.locator(".site-channel-description")).toHaveText(
-    "真・女神転生Ⅴ Vengeance",
+    "The Division2 Y8S3",
   );
 });
 const board = {
@@ -342,7 +349,9 @@ test("white site groups channel text and serves local YP icons", async ({
     )
     .toBe(true);
   await expect(icons.first()).toHaveAttribute("src", /yp-sp/);
-  await expect(icons.last()).toHaveAttribute("src", /mouneyou/);
+  await expect(icons.last()).toHaveAttribute("src", /yp-0yp/);
+  await expect(icons.last()).toHaveCSS("border-radius", "0px");
+  await expect(icons.last()).toHaveCSS("object-fit", "contain");
   await page.screenshot({
     path: testInfo.outputPath("site-white-list.png"),
     fullPage: true,
@@ -567,13 +576,13 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
     .click();
   await expect(page.getByText("my-secret-key", { exact: true })).toHaveCount(0);
   await page
-    .getByRole("textbox", { name: "配信名", exact: true })
+    .getByRole("textbox", { name: "チャンネル名", exact: true })
     .fill("My live");
   await page
     .getByRole("textbox", { name: "ジャンル", exact: true })
     .fill("Music");
   await page
-    .getByRole("textbox", { name: "説明", exact: true })
+    .getByRole("textbox", { name: "詳細", exact: true })
     .fill("Live session");
   await page
     .getByRole("textbox", { name: "コメント", exact: true })
@@ -581,7 +590,9 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
   await page
     .getByRole("textbox", { name: "コンタクトURL", exact: true })
     .fill("https://bbs.jpnkn.com/board/");
-  await expect(page.getByRole("spinbutton", { name: "ビットレート (kbps)" })).toHaveCount(0);
+  await expect(
+    page.getByRole("spinbutton", { name: "ビットレート (kbps)" }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "配信枠を作成", exact: true }).click();
   await expect(page.getByRole("heading", { name: "My live" })).toBeVisible();
   await expect(
@@ -594,7 +605,7 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
   page.on("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "自分の配信を停止" }).click();
   await expect(
-    page.getByRole("textbox", { name: "配信名", exact: true }),
+    page.getByRole("textbox", { name: "チャンネル名", exact: true }),
   ).toHaveValue("My live");
   await expect(
     page.getByRole("textbox", { name: "コメント", exact: true }),
@@ -606,9 +617,171 @@ test("broadcast page retains owner-only key and broadcast workflow", async ({
     page.getByRole("spinbutton", { name: "ビットレート (kbps)" }),
   ).toHaveCount(0);
   await expect(
-    page.getByRole("textbox", { name: "配信名", exact: true }),
+    page.getByRole("textbox", { name: "チャンネル名", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "メニュー", exact: true }).click();
   await page.getByRole("button", { name: "ログアウト", exact: true }).click();
   await expect(page.getByRole("link", { name: "X でログイン" })).toBeVisible();
+});
+
+test("broadcast history defaults, selection and new thread preserve form edits", async ({
+  page,
+}, testInfo) => {
+  const history = [
+    {
+      name: "いまいch",
+      genre: "ゲーム",
+      description: "今回の詳細",
+      comment: "コメント",
+      contactUrl: "https://bbs.jpnkn.com/test/read.cgi/imai/100/",
+      createdAt: "2026-09-15T01:00:00Z",
+    },
+    {
+      name: "以前の配信",
+      genre: "音楽",
+      description: "以前の詳細",
+      comment: "以前のコメント",
+      contactUrl: "https://bbs.jpnkn.com/imai/",
+      createdAt: "2026-09-14T01:00:00Z",
+    },
+  ];
+  await page.route("**/site/api/me", (r) =>
+    r.fulfill({ json: { user: { id: "1", name: "Alice" }, csrf: "csrf" } }),
+  );
+  await page.route("**/site/api/broadcast", (r) =>
+    r.fulfill({
+      json: {
+        streamKey: "ab1234",
+        rtmpUrl: "rtmp://live.example/live",
+        channel: null,
+        history,
+      },
+    }),
+  );
+  await page.route("**/site/api/broadcast/board?*", (r) => {
+    const url = new URL(r.request().url()).searchParams.get("url");
+    const moved = url?.includes("/200/");
+    return r.fulfill({
+      json: {
+        supported: true,
+        boardTitle: "いまいch",
+        boardUrl: "https://bbs.jpnkn.com/imai/",
+        thread: url?.includes("read.cgi")
+          ? {
+              id: moved ? "200" : "100",
+              title: moved ? "いまいch 213" : "いまいch 212",
+              comments: moved ? 2 : 1001,
+            }
+          : null,
+        threadUrl: url,
+        latestThread: { id: "200", title: "いまいch 213", comments: 2 },
+        latestThreadUrl: "https://bbs.jpnkn.com/test/read.cgi/imai/200/",
+      },
+    });
+  });
+  await page.goto("/broadcast");
+  const name = page.getByRole("textbox", { name: "チャンネル名", exact: true });
+  const contact = page.getByRole("textbox", {
+    name: "コンタクトURL",
+    exact: true,
+  });
+  const detail = page.getByRole("textbox", { name: "詳細", exact: true });
+  await expect(name).toHaveValue("いまいch");
+  await expect(
+    page.getByRole("textbox", { name: "ジャンル", exact: true }),
+  ).toHaveValue("ゲーム");
+  await expect(
+    page.getByText("いまいch 212 (1001)", { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("broadcast-create.png"),
+    fullPage: true,
+  });
+  await detail.fill("編集中の詳細");
+  await page.getByRole("button", { name: "配信状態を更新" }).click();
+  await expect(detail).toHaveValue("編集中の詳細");
+  await page.getByRole("button", { name: "新スレに移動", exact: true }).click();
+  await expect(contact).toHaveValue(
+    "https://bbs.jpnkn.com/test/read.cgi/imai/200/",
+  );
+  await expect(
+    page.getByText("いまいch 213 (2)", { exact: true }),
+  ).toBeVisible();
+  await expect(detail).toHaveValue("編集中の詳細");
+  await page
+    .getByRole("combobox", { name: "以前の設定を読み込む" })
+    .selectOption("1");
+  await expect(name).toHaveValue("以前の配信");
+  await expect(
+    page.getByRole("textbox", { name: "ジャンル", exact: true }),
+  ).toHaveValue("音楽");
+  await expect(detail).toHaveValue("以前の詳細");
+  await expect(
+    page.getByRole("textbox", { name: "コメント", exact: true }),
+  ).toHaveValue("以前のコメント");
+  await expect(contact).toHaveValue("https://bbs.jpnkn.com/imai/");
+  await page.reload();
+  await expect(name).toHaveValue("いまいch");
+});
+
+test("broadcast board failures and outdated responses do not replace contact URL", async ({
+  page,
+}) => {
+  await page.route("**/site/api/me", (r) =>
+    r.fulfill({ json: { user: { id: "1", name: "Alice" }, csrf: "csrf" } }),
+  );
+  await page.route("**/site/api/broadcast", (r) =>
+    r.fulfill({
+      json: {
+        streamKey: "ab1234",
+        rtmpUrl: "rtmp://live.example/live",
+        channel: null,
+        history: [],
+      },
+    }),
+  );
+  await page.route("**/site/api/broadcast/board?*", (r) =>
+    r.fulfill({ status: 502, body: "掲示板を取得できません。" }),
+  );
+  await page.goto("/broadcast");
+  await expect(
+    page.getByRole("combobox", { name: "以前の設定を読み込む" }),
+  ).toBeDisabled();
+  const contact = page.getByRole("textbox", {
+    name: "コンタクトURL",
+    exact: true,
+  });
+  await contact.fill("https://bbs.jpnkn.com/old/");
+  await expect(
+    page.getByText("掲示板を取得できません。", { exact: true }),
+  ).toBeVisible();
+  await expect(contact).toHaveValue("https://bbs.jpnkn.com/old/");
+  let release: () => void = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reads = 0;
+  await page.route("**/site/api/broadcast/board?*", async (r) => {
+    reads++;
+    if (reads > 1) await pending;
+    await r
+      .fulfill({
+        json: {
+          supported: true,
+          boardTitle: "Old",
+          boardUrl: "https://bbs.jpnkn.com/old/",
+          thread: null,
+          latestThread: { id: "200", title: "New", comments: 1 },
+          latestThreadUrl: "https://bbs.jpnkn.com/test/read.cgi/old/200/",
+        },
+      })
+      .catch(() => {});
+  });
+  await page.getByRole("button", { name: "掲示板情報を再取得" }).click();
+  await page.getByRole("button", { name: "新スレに移動", exact: true }).click();
+  await expect.poll(() => reads).toBe(2);
+  await contact.fill("");
+  release();
+  await expect(contact).toHaveValue("");
+  await expect(page.getByText("Old", { exact: true })).toHaveCount(0);
 });

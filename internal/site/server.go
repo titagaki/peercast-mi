@@ -111,6 +111,9 @@ func New(cfg config.Site, mgr *channel.Manager, backendPort int, bump func()) (*
 			return nil, errors.New("site.dev_login requires an HTTP loopback origin and a literal loopback listen address; never expose development login publicly")
 		}
 	}
+	if cfg.BroadcastHistoryDir == "" {
+		cfg.BroadcastHistoryDir = "site-data/broadcast-history"
+	}
 	if cfg.UIDir == "" {
 		cfg.UIDir = "ui/dist"
 	}
@@ -266,6 +269,7 @@ func (s *Server) Handler() http.Handler {
 	protected("GET /site/api/directory", s.directory)
 	protected("GET /site/api/channels/{id}/comments", s.comments)
 	protected("GET /site/api/broadcast", s.broadcastInfo)
+	protected("GET /site/api/broadcast/board", s.broadcastBoard)
 	protected("POST /site/api/key", s.rotateKey)
 	protected("POST /site/api/broadcast", s.broadcast)
 	protected("DELETE /site/api/broadcast", s.stopBroadcast)

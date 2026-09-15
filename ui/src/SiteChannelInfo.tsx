@@ -1,6 +1,7 @@
 import type { SiteChannel } from "./site-api";
 import spIcon from "./assets/yp-sp.png";
 import tpIcon from "./assets/yp-tp.png?no-inline";
+import zeroYpIcon from "./assets/yp-0yp.ico";
 import defaultIcon from "./assets/mouneyou.png";
 
 import { channelExplanation } from "./site-channel-text";
@@ -28,13 +29,15 @@ export function SiteChannelInfo({
       ? spIcon
       : channel.yellowPage === "TP"
         ? tpIcon
-        : defaultIcon;
+        : channel.yellowPage === "0yp"
+          ? zeroYpIcon
+          : defaultIcon;
   const explanation = channelExplanation(channel);
   const title = detail ? <h2>{name}</h2> : <h3>{name}</h3>;
   return (
     <div className={`site-channel-info${detail ? " site-channel-detail" : ""}`}>
       <img
-        className="site-channel-icon"
+        className={`site-channel-icon${channel.yellowPage === "0yp" ? " site-channel-icon-0yp" : ""}`}
         src={icon}
         alt=""
         width="48"

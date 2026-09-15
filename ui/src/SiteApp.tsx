@@ -7,7 +7,9 @@ import {
   type SiteSession,
   type SiteDirectory,
   type OwnBroadcast,
+  type BroadcastSettings,
 } from "./site-api";
+import { BroadcastForm } from "./BroadcastForm";
 import { SitePlayer } from "./SitePlayer";
 import { SiteComments } from "./SiteComments";
 import { SiteChannelInfo } from "./SiteChannelInfo";
@@ -315,20 +317,41 @@ function WatchPage({ id }: { id: string }) {
 function Broadcast({ csrf }: { csrf: string }) {
   const own = useResource(loadBroadcast, 5000);
   const action = useAction();
-  const [name, setName] = useState("");
-  const [genre, setGenre] = useState("");
-  const [description, setDescription] = useState("");
-  const [comment, setComment] = useState("");
-  const [contactUrl, setContactUrl] = useState("");
+  const [stopped, setStopped] = useState<BroadcastSettings>();
   return (
     <section className="panel">
-      <h2>配信する</h2>
+      <h2>チャンネル作成</h2>
       <Notice error={own.error || action.error} message={action.message} />
       <button onClick={own.reload} disabled={own.loading || action.busy}>
         配信状態を更新
       </button>
       {own.data && (
         <>
+          {!own.data.channel && (
+            <BroadcastForm
+              history={own.data.history ?? []}
+              initial={stopped}
+              disabled={action.busy || !own.data.streamKey || !!own.error}
+              onSubmit={(settings) => {
+                void action.run(async () => {
+                  await siteAPI("broadcast", {
+                    method: "POST",
+                    csrf,
+                    body: {
+                      name: settings.name,
+                      genre: settings.genre,
+                      description: settings.description,
+                      comment: settings.comment,
+                      contactUrl: settings.contactUrl,
+                      bitrate: 0,
+                    },
+                  });
+                  setStopped(undefined);
+                  own.reload();
+                }, "配信枠を作成しました。配信ソフトで送信を開始してください。");
+              }}
+            />
+          )}
           <p>
             OBS
             等の配信ソフトに設定してください。先に配信枠を作成し、その後ソフトで配信を開始します。
@@ -408,11 +431,15 @@ function Broadcast({ csrf }: { csrf: string }) {
                     return;
                   void action.run(async () => {
                     await siteAPI("broadcast", { method: "DELETE", csrf });
-                    setName(current.name);
-                    setGenre(current.genre);
-                    setDescription(current.description);
-                    setComment(current.comment ?? "");
-                    setContactUrl(current.contactUrl);
+                    setStopped(
+                      own.data?.history?.[0] ?? {
+                        name: current.name,
+                        genre: current.genre,
+                        description: current.description,
+                        comment: current.comment ?? "",
+                        contactUrl: current.contactUrl,
+                      },
+                    );
                     own.reload();
                   }, `「${current.name}」の配信を停止しました。入力内容を引き継いで再作成できます。`);
                 }}
@@ -420,80 +447,7 @@ function Broadcast({ csrf }: { csrf: string }) {
                 自分の配信を停止
               </button>
             </>
-          ) : (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void action.run(async () => {
-                  await siteAPI("broadcast", {
-                    method: "POST",
-                    csrf,
-                    body: {
-                      name,
-                      genre,
-                      description,
-                      comment,
-                      contactUrl,
-                      bitrate: 0,
-                    },
-                  });
-                  own.reload();
-                }, "配信枠を作成しました。配信ソフトで送信を開始してください。");
-              }}
-            >
-              <fieldset
-                disabled={action.busy || own.loading || !own.data.streamKey}
-              >
-                <legend>新しい配信枠</legend>
-                <div className="form-grid">
-                  <label>
-                    配信名
-                    <input
-                      required
-                      maxLength={80}
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    ジャンル
-                    <input
-                      maxLength={80}
-                      value={genre}
-                      onChange={(e) => setGenre(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    説明
-                    <textarea
-                      maxLength={600}
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    コメント
-                    <textarea
-                      maxLength={600}
-                      value={comment}
-                      onChange={(e) => setComment(e.target.value)}
-                    />
-                  </label>
-                  <label>
-                    コンタクトURL
-                    <input
-                      type="url"
-                      maxLength={2048}
-                      value={contactUrl}
-                      onChange={(e) => setContactUrl(e.target.value)}
-                      placeholder="https://…"
-                    />
-                  </label>
-                </div>
-                <button type="submit">配信枠を作成</button>
-              </fieldset>
-            </form>
-          )}
+          ) : null}
         </>
       )}
     </section>

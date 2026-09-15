@@ -3,3 +3,5 @@ stream_keys.json
 broadcast_id
 ui/.env.local
 /.env
+
+site-data/

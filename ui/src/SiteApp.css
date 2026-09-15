@@ -260,6 +260,10 @@ body:has(.site-app) {
   border: 1px solid var(--border);
   background: #fff;
 }
+.site-channel-icon-0yp {
+  border-radius: 0;
+  object-fit: contain;
+}
 .site-channel-copy {
   min-width: 0;
   flex: 1;
@@ -315,4 +319,36 @@ body:has(.site-app) {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.broadcast-form {
+  max-width: 52rem;
+  margin-top: 1rem;
+}
+.broadcast-form fieldset {
+  min-width: 0;
+}
+.broadcast-form select {
+  width: 100%;
+  margin-bottom: 1rem;
+}
+.broadcast-fields label {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+}
+.broadcast-board {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.25rem 0 1rem;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .broadcast-fields label {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.3rem;
+  }
 }

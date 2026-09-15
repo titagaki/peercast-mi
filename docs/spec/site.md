@@ -22,7 +22,7 @@ base_path は `/` から始まり、各要素が英数字・`_`・`-` のみの�
 
 UI は `ui/` で `PEERCAST_SITE_BASE_PATH=/mi npm run build` として同じパスでビルドする。開発サーバーにも同じ環境変数を指定する。リンク、アセット、API、映像 URL にこのパスを使う。X の callback 登録は `https://yayaue.me/mi/auth/x/callback`。ログイン後の `next` は接頭辞を含むサイト内ページのみ受理し、その他は `/mi/` に戻す。セッション・OAuth cookie の Path は `/mi/`（ルート配置時は `/`）。削除時も同じ Path を使う。Origin・CSRF 検証は引き続きオリジン単位。
 
-リバースプロキシは `/mi` と `/mi/*` をサイト専用待受へ転送し、接頭辞を削らない。管理JSON-RPCの直接入口は転送せず、管理者用 `/admin/api/1` はサイト側の認証を経由する。Dockerfile は UI をビルドして同梱し、build arg `PEERCAST_SITE_BASE_PATH`（既定空文字）でパスを指定する。実行ユーザーは UID/GID 10001。`/config` はこのユーザーが書き込めるようにマウントし、設定と同じディレクトリの `broadcast_id`・`stream_keys.json` を永続化する。
+リバースプロキシは `/mi` と `/mi/*` をサイト専用待受へ転送し、接頭辞を削らない。管理JSON-RPCの直接入口は転送せず、管理者用 `/admin/api/1` はサイト側の認証を経由する。Dockerfile は UI をビルドして同梱し、build arg `PEERCAST_SITE_BASE_PATH`（既定空文字）でパスを指定する。実行ユーザーは UID/GID 10001。`/config` はこのユーザーが書き込めるようにマウントし、設定と同じディレクトリの `broadcast_id`・`stream_keys.json`・`site-data/broadcast-history/` を永続化する。
 
 ## 有効化
 
@@ -64,6 +64,7 @@ max_viewers_per_user = 2
 | `admin_x_ids` | サイト管理者のX数値IDの配列。既定空配列 |
 | `base_path` | 公開パスの接頭辞。既定空文字、例 `/mi`。UI のビルド設定と一致させる |
 | `ui_dir` | Vite build 出力。省略時 `ui/dist`。相対パスはプロセスの作業ディレクトリ基準 |
+| `broadcast_history_dir` | 本人の配信設定履歴の保存先。省略時は設定ファイルと同じディレクトリの `site-data/broadcast-history`。明示した相対パスは作業ディレクトリ基準。単一プロセスで使用し、永続領域として保全する |
 | `rtmp_url` | 利用者へ表示する RTMP(S) アプリケーション URL。必須。Go の待受先を変更する設定ではない |
 | `max_viewers` | サイト全体の同時メディア接続数。省略 / 0 は 20。負数は起動エラー |
 | `max_viewers_per_user` | X ID 単位の同時メディア接続数。省略 / 0 は 2。負数は起動エラー |
@@ -120,9 +121,10 @@ JSON の成功応答、失敗時は HTTP ステータスとテキストメッセ
 | `GET /site/api/channels` | なし | `ChannelView[]`。YP のHTTP番組一覧に掲載されたチャンネルのみ |
 | `GET /site/api/directory` | なし | `{channels:ChannelView[],sources:YPStatus[]}`。画面が利用する一覧・取得状態 |
 | `GET /site/api/channels/{id}/comments` | 任意の `thread`（数値 ID） | `{supported,threadId,threadTitle,commentCount,threads,comments}`。認証済み掲示板閲覧 |
-| `GET /site/api/broadcast` | なし | `{streamKey,rtmpUrl,channel:ChannelView|null}`。本人のキーのみ |
+| `GET /site/api/broadcast` | なし | `{streamKey,rtmpUrl,channel:ChannelView|null,history:BroadcastHistoryEntry[]}`。本人のキー・履歴のみ。履歴読込失敗500 |
+| `GET /site/api/broadcast/board` | `url` 1件（最大2048 bytes） | 認証必須。`{supported,boardTitle,boardUrl,thread,threadUrl,latestThread,latestThreadUrl,threadError?}`。不正クエリ400、取得失敗502 |
 | `POST /site/api/key` | CSRF | `{streamKey}`。生成 / 再発行。本人の配信枠がある間は 409 |
-| `POST /site/api/broadcast` | CSRF、JSON `{name,genre,description,comment?,contactUrl?,bitrate?}` | `ChannelView`。1 ユーザー 1 枠。未発行キー / 既存枠は 409 |
+| `POST /site/api/broadcast` | CSRF、JSON `{name,genre,description,comment?,contactUrl?,bitrate?}` | `ChannelView`。1 ユーザー 1 枠。未発行キー / 既存枠は 409。履歴読込・保存失敗500（作成枠は取り消す） |
 | `DELETE /site/api/broadcast` | CSRF | `{ok:true}`。本人の枠だけ停止。枠なしでも成功 |
 | `GET /site/stream/{id}` | 32 hex のチャンネル ID | 認証付き HTTP ストリーム。任意クエリは 400、一覧外 / 接続不可 404、視聴枠 / サイト中継数の上限 429、中継生成失敗 503 |
 
@@ -180,11 +182,11 @@ channels_url = "http://bayonet.ddo.jp/sp/index.txt"
 
 ### ページとプレイヤー
 
-表示用ジャンルでは、先頭の `yp` / `sp` / `tp` に続く英数字ネームスペース＋`:`、`?`、`@` 列を YP4G 制御部分として除去する。制御記号がなくても接頭辞直後が末尾または英数字以外なら接頭辞を除去する。`sports` など英数字が直結し制御記号のない曖昧な文字列、未知の接頭辞、途中の制御記号は保持する。除去後に空になったジャンルの区切り ` - ` は表示しない。一覧・詳細・検索に共通で適用し、API・カタログ・PCP の元データや YP の人数・帯域制御は変更しない。
+表示用ジャンルでは、先頭の `yp` / `sp` / `tp` / `pp` に続く英数字ネームスペース＋`:`、`?`、`@` 列を YP4G 制御部分として除去する。制御記号がなくても接頭辞直後が末尾または英数字以外なら接頭辞を除去する。`sports` など英数字が直結し制御記号のない曖昧な文字列、未知の接頭辞、途中の制御記号は保持する。除去後に空になったジャンルの区切り ` - ` は表示しない。一覧・詳細・検索に共通で適用し、API・カタログ・PCP の元データや YP の人数・帯域制御は変更しない。
 
 チャンネル一覧のカード全体は個別視聴ページへの通常のリンク。名前・アイコン・説明・余白のどこからでも移動でき、Tab / Enter、新しいタブで開く操作にも対応する。カード内にリンクを入れ子にしない。
 
-視聴サイトは OS のダーク設定によらず白背景・濃いグレーの文字を使う。管理パネルの配色は変更しない。一覧と詳細は YP アイコン、チャンネル名、`ジャンル - 説明 配信者コメント`、既知の視聴人数・配信経過時間を表示する。詳細のチャンネル情報は動画の下に置く。ジャンル中の独立した `game`、説明の `<Open>` / `<Free>` / `<2M Over>` / `<Over>` は表示時だけ省略する。文字列は HTML として描画しない。検索対象は名前・表示説明（ジャンルとコメントを含む）。アイコンは同梱画像を使い、SP / TP 以外には共通画像を表示する。個人アバター・外部画像 URL の取得は行わない。
+視聴サイトは OS のダーク設定によらず白背景・濃いグレーの文字を使う。管理パネルの配色は変更しない。一覧と詳細は YP アイコン、チャンネル名、`ジャンル - 説明 配信者コメント`、既知の視聴人数・配信経過時間を表示する。詳細のチャンネル情報は動画の下に置く。ジャンル中の独立した `game`、説明の `<Open>` / `<Free>` / `<2M Over>` / `<Over>` は表示時だけ省略する。文字列は HTML として描画しない。検索対象は名前・表示説明（ジャンルとコメントを含む）。アイコンは同梱画像を使い、SP / TP / 0yp 以外には共通画像を表示する。0yp は同梱の favicon を使い、丸く切り取らず正方形の枠内に画像全体を表示する。個人アバター・外部画像 URL の取得は行わない。
 
 ChannelView の任意フィールド `comment` は配信者コメント（掲示板コメントとは別）、`uptime` は秒単位の配信経過時間。不明な uptime は省略する。YP 由来は YP の値を使い、ローカル中継を開始しても中継経過時間に置き換えない。自ノードの配信は自ノードでの開始からの経過時間を使う。視聴人数が負なら表示しない。
 
@@ -215,3 +217,15 @@ Go のサイトサーバーは `/`・`/channels/<id>`・`/broadcast`・`/admin` 
 配信ページは本人の状態を5秒ごとに取得し、配信枠があれば「OBS接続待ち」または「配信中」、ジャンル・説明・コメント・コンタクトURL・ビットレートを表示する。視聴ページへのリンクを提供する。`ChannelView.bitrate` はkbps（0は不明・自動）。自ノードの情報から設定する。
 
 停止はチャンネル名を示して確認し、失敗時は配信状態を維持してエラーを表示する。成功時は停止したチャンネル名を表示し、そのページ内の入力値に直前のチャンネル情報を戻す。同じ内容で再作成できるが、ページを閉じた後の履歴保存は行わない。停止後もキーは有効で、OBSの送信停止はOBS側で行う。
+
+### 配信フォームの履歴と掲示板情報
+
+`BroadcastHistoryEntry` は `{name,genre,description,comment,contactUrl,createdAt}`。作成成功時の入力5項目（name / genre / contactUrl は前後空白除去、genre は公開用 yp 補完前）と UTC の日時を新しい順で最大10件保存する。ビットレート・キーは含めない。アカウントはセッションで確定し、他人の指定は受け付けない。X アカウント単位で別端末・再ログイン・キー再発行・再起動後も利用できる。
+
+フォーム初期値は直近履歴、履歴なしは空欄。「以前の設定を読み込む」で名前・日時・詳細（空ならコメント）を見て選択し、5項目を読み込む。未送信の編集は永続化しない。定期取得では編集中の値を上書きしない。配信停止後は直近履歴を再表示する。導入前の枠で履歴がなければ停止時のチャンネル情報を引き継ぐ。
+
+保存は `broadcast_history_dir` 内のアカウント識別子 SHA-256 をファイル名とする JSON（`{version:1,entries:[...]}`）。新規ディレクトリ0700、ファイル0600。一時ファイルを同期して rename で置換する。読込時は512 KiBまで・バージョンと件数を確認し、不正ファイルは上書きしない。書込失敗時は作成枠を停止して500を返す。同じディレクトリを複数プロセスから使用しない。
+
+コンタクトURLは入力停止400ms後に掲示板情報を取得する。対応先はしたらば（旧 livedoor ホストは正規化）と jpnkn。許可ホスト・既知パスだけを解析し、既存掲示板 reader の公開IP制限・リダイレクト拒否・応答サイズ制限・10秒キャッシュを適用する。未対応URLは `supported:false`。掲示板設定と subject.txt から掲示板名・現在のスレ名・レス数を表示し、一覧にない指定スレは本文取得で補完を試みる。本文取得不可は `threadError` に返し、新スレ候補は利用可能。
+
+`thread` / `latestThread` は `{id,title,comments}` または null。`BBS_THREAD_STOP`（未設定・不正値は1000）よりレス数が少ないスレのうち数値ID最大を最新とする。「新スレに移動」は再取得した最新候補の正規スレッドURLで入力欄を差し替える。板トップからも使える。候補なしはボタン無効、取得失敗時はURLを維持する。スレッド作成や配信中の情報変更は行わない。URL変更後に古い応答で入力を上書きしない。

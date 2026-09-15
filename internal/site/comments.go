@@ -223,6 +223,9 @@ func plainComment(s string) string {
 	return strings.TrimSpace(html.UnescapeString(markupTag.ReplaceAllString(breakTag.ReplaceAllString(s, "\n"), "")))
 }
 func parseSubjects(body string, shitaraba bool) ([]bbsThread, error) {
+	return parseSubjectsLimit(body, shitaraba, 200)
+}
+func parseSubjectsLimit(body string, shitaraba bool, limit int) ([]bbsThread, error) {
 	rows := make([]bbsThread, 0)
 	seen := map[string]bool{}
 	scan := bufio.NewScanner(strings.NewReader(body))
@@ -251,7 +254,7 @@ func parseSubjects(body string, shitaraba bool) ([]bbsThread, error) {
 		count, _ := strconv.Atoi(m[2])
 		seen[id] = true
 		rows = append(rows, bbsThread{id, plainComment(m[1]), count})
-		if len(rows) == 200 {
+		if limit > 0 && len(rows) == limit {
 			break
 		}
 	}

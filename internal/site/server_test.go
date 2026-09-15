@@ -27,7 +27,7 @@ func testSite(t *testing.T) *Server {
 	m := channel.NewManager(pcp.GnuID{})
 	m.SetCachePath(filepath.Join(t.TempDir(), "keys.json"))
 	t.Cleanup(m.StopAll)
-	s, e := New(config.Site{Origin: "https://live.example", RTMPURL: "rtmps://live.example/live", MaxViewers: 2, MaxViewersPerUser: 1}, m, 7144, nil)
+	s, e := New(config.Site{BroadcastHistoryDir: filepath.Join(t.TempDir(), "history"), Origin: "https://live.example", RTMPURL: "rtmps://live.example/live", MaxViewers: 2, MaxViewersPerUser: 1}, m, 7144, nil)
 	if e != nil {
 		t.Fatal(e)
 	}

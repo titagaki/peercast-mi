@@ -90,6 +90,10 @@ func main() {
 	// Configure the website's HTTP viewing gate before accepting any traffic.
 	var website *site.Server
 	if cfg.Site.Enabled {
+		// Keep history on the same persistent volume as configuration and keys.
+		if cfg.Site.BroadcastHistoryDir == "" {
+			cfg.Site.BroadcastHistoryDir = filepath.Join(filepath.Dir(*configPath), "site-data", "broadcast-history")
+		}
 		website, err = site.New(cfg.Site, mgr, cfg.PeercastPort, nil)
 		if err != nil {
 			slog.Error("site: invalid configuration", "err", err)
