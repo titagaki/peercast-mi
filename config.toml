@@ -79,6 +79,8 @@ rtmp_url = "rtmp://localhost:1945/live"
 # base_path = ""
 # UIファイルの配置先。相対パスはプロセスの作業ディレクトリ基準。
 # ui_dir = "ui/dist"
+# 元IPを受け取るプロキシの接続元CIDR。直接公開時は指定しない。
+# trusted_proxies = ["127.0.0.1/32", "::1/128"]
 # 配信履歴。省略時は設定ファイルと同じディレクトリの site-data/broadcast-history
 # broadcast_history_dir = "site-data/broadcast-history"
 # サイトの視聴接続上限。省略/0で以下の既定値を使う（0は無制限ではない）。

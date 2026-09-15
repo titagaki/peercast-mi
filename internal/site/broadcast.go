@@ -151,7 +151,12 @@ func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, ss *session) 
 		http.Error(w, "以前の設定を読み込めませんでした。", 500)
 		return
 	}
-	ch, err := s.mgr.Broadcast(key, channel.ChannelInfo{Name: input.Name, Genre: input.Genre, Desc: input.Description, Comment: input.Comment, URL: input.ContactURL, Bitrate: uint32(input.Bitrate), Type: "FLV", MIMEType: "video/x-flv", Ext: ".flv"}, channel.TrackInfo{})
+	clientIP := s.broadcastClientIP(r)
+	if clientIP == "" {
+		http.Error(w, "接続元IPを確認できませんでした。", 400)
+		return
+	}
+	ch, err := s.mgr.Broadcast(key, channel.ChannelInfo{Name: input.Name, Genre: input.Genre, Desc: input.Description, Comment: input.Comment, URL: input.ContactURL, Bitrate: uint32(input.Bitrate), Type: "FLV", MIMEType: "video/x-flv", Ext: ".flv"}, channel.TrackInfo{Creator: clientIP + " via PecaMI"})
 	if err != nil {
 		http.Error(w, "配信枠を作成できませんでした。", 409)
 		return

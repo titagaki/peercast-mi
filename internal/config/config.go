@@ -81,6 +81,7 @@ type Config struct {
 
 // Site is opt-in; secrets are read from the named process environment variables.
 type Site struct {
+	TrustedProxies      []string `toml:"trusted_proxies"`
 	BroadcastHistoryDir string   `toml:"broadcast_history_dir"`
 	AdminXIDs           []string `toml:"admin_x_ids"`
 	MaxRelayChannels    int      `toml:"max_relay_channels"`

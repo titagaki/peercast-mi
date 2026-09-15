@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -51,6 +52,7 @@ type flow struct {
 }
 
 type Server struct {
+	trustedProxies                      []netip.Prefix
 	boards                              *boardReader
 	catalog                             *catalog.Catalog
 	cfg                                 config.Site
@@ -140,7 +142,15 @@ func New(cfg config.Site, mgr *channel.Manager, backendPort int, bump func()) (*
 	if !cfg.DevLogin && (clientID == "" || secret == "") {
 		return nil, errors.New("PEERCAST_X_CLIENT_ID and PEERCAST_X_CLIENT_SECRET are required")
 	}
-	s := &Server{adminIDs: adminIDs, cfg: cfg, mgr: mgr, bump: bump, clientID: clientID, clientSecret: secret, viewerToken: randomToken(),
+	var trustedProxies []netip.Prefix
+	for _, value := range cfg.TrustedProxies {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("site.trusted_proxies: invalid CIDR %q", value)
+		}
+		trustedProxies = append(trustedProxies, prefix)
+	}
+	s := &Server{trustedProxies: trustedProxies, adminIDs: adminIDs, cfg: cfg, mgr: mgr, bump: bump, clientID: clientID, clientSecret: secret, viewerToken: randomToken(),
 		client:   &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		boards:   newBoardReader(),
 		tokenURL: "https://api.x.com/2/oauth2/token", meURL: "https://api.x.com/2/users/me",
