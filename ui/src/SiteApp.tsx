@@ -40,10 +40,9 @@ export default function SiteApp() {
           <div>
             <h1>
               <a className="site-brand" href={siteURL("/")}>
-                peercast-mi live
+                PecaMI
               </a>
             </h1>
-            <span className="muted">見つける、観る、配信する</span>
           </div>
         </div>
         {session.data?.user && (
