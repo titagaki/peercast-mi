@@ -11,7 +11,8 @@ import (
 )
 
 // Uses only the disposable, fixed-name test database. Never reads production credentials.
-func TestMariaDB(t *testing.T) {
+func testMariaDB(t *testing.T) *MySQL {
+	t.Helper()
 	addr := os.Getenv("PEERCAST_AUDIT_TEST_ADDR")
 	if addr == "" {
 		t.Skip("set PEERCAST_AUDIT_TEST_ADDR to a disposable MariaDB with database peercast_mi_audit_test")
@@ -29,7 +30,13 @@ func TestMariaDB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.DB.Close()
+	t.Cleanup(func() { db.DB.Close() })
+	return db
+}
+
+func TestMariaDB(t *testing.T) {
+	var err error
+	db := testMariaDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err = db.Migrate(ctx); err != nil {

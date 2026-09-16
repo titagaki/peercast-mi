@@ -7,8 +7,7 @@
 
 ## 未着手
 
-- [ ] 監査DBの本番導入 — 専用DB・権限作成、明示migration、接続・バックアップ運用確認。[仕様](spec/audit.md)。ローカルMariaDB 11.4での実装検証済み。
-- [ ] 管理者向けログイン・配信履歴の検索画面 — 保存と状態APIは実装済み。現在はSQLで参照。
+- [ ] 監査DB・スプールのバックアップと復元を確認 — 本番DBの作成・migration・配信履歴保存はユーザーの実行結果で確認済み。[仕様](spec/audit.md)。
 
 ### 互換性・検証
 
@@ -70,3 +69,7 @@
 ## 2026-09-16 完了
 
 - [x] ログイン・配信履歴のMariaDB保存、スプール再送、復旧照合、保持期限、管理状態API — [ADR 0032](decisions/0032-site-audit-mariadb.md)、[検証記録](reviews/2026-09-16-audit-implementation.md)。
+
+## 2026-09-17 完了
+
+- [x] 管理者向けログイン・操作ログ・配信履歴の検索画面 — [ADR 0033](decisions/0033-admin-audit-history.md)、[API・画面仕様](spec/audit.md#管理パネルでの閲覧)。

@@ -191,6 +191,15 @@ func main() {
 	slog.Info("api: JSON-RPC ready", "port", cfg.PeercastPort)
 	if website != nil {
 		website.SetCatalog(apiServer.Catalog())
+		if cfg.Audit.Enabled {
+			readDB, err := audit.OpenMySQL()
+			if err != nil {
+				slog.Error("audit: history reader database environment incomplete")
+			} else {
+				defer readDB.DB.Close()
+				website.SetAuditReader(readDB)
+			}
+		}
 		website.SetAdminHandler(apiServer.Handler())
 		website.SetBump(func() {
 			if ypBumper != nil {

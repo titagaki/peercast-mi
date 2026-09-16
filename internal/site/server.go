@@ -55,6 +55,8 @@ type flow struct {
 }
 
 type Server struct {
+	auditReader                         audit.Reader
+	auditReadSlots                      chan struct{}
 	trustedProxies                      []netip.Prefix
 	boards                              *boardReader
 	catalog                             *catalog.Catalog
@@ -283,6 +285,9 @@ func (s *Server) Handler() http.Handler {
 	protected("GET /site/api/directory", s.directory)
 	protected("GET /site/api/channels/{id}/comments", s.comments)
 	protected("GET /site/api/audit/status", s.auditStatus)
+	protected("GET /site/api/audit/events", s.auditEvents)
+	protected("GET /site/api/audit/broadcasts", s.auditBroadcasts)
+	protected("GET /site/api/audit/broadcasts/{id}/inputs", s.auditInputs)
 	protected("GET /site/api/broadcast", s.broadcastInfo)
 	protected("GET /site/api/broadcast/board", s.broadcastBoard)
 	protected("POST /site/api/key", s.rotateKey)

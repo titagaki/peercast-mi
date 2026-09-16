@@ -12,7 +12,7 @@ async function loadAdminSession(signal?: AbortSignal) {
 
 export default function SiteAdmin() {
   const session = useResource(loadAdminSession, 30000);
-  if (!session.error && session.data?.admin) return <App />;
+  if (!session.error && session.data?.admin) return <App auditAvailable />;
   return (
     <main className="site-app">
       <h1>管理パネル</h1>

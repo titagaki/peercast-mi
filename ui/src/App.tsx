@@ -1,11 +1,16 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
+const AuditLogPage = lazy(() => import("./AuditLogPage"));
 import "./App.css";
 import { ChannelsPage } from "./ChannelsPage";
 import { StreamKeysPage } from "./StreamKeysPage";
 import { StatusPage } from "./StatusPage";
 
-type Page = "channels" | "keys" | "status";
-export default function App() {
+type Page = "channels" | "keys" | "status" | "audit";
+export default function App({
+  auditAvailable = false,
+}: {
+  auditAvailable?: boolean;
+}) {
   const [page, setPage] = useState<Page>("channels");
   return (
     <div className="app">
@@ -28,6 +33,7 @@ export default function App() {
               ["channels", "チャンネル"],
               ["keys", "ストリームキー"],
               ["status", "ノード情報"],
+              ...(auditAvailable ? [["audit", "ログ"] as const] : []),
             ] as const
           ).map(([id, label]) => (
             <button
@@ -45,6 +51,10 @@ export default function App() {
           <ChannelsPage />
         ) : page === "keys" ? (
           <StreamKeysPage />
+        ) : page === "audit" ? (
+          <Suspense fallback={<p role="status">ログ画面を読み込み中…</p>}>
+            <AuditLogPage />
+          </Suspense>
         ) : (
           <StatusPage />
         )}

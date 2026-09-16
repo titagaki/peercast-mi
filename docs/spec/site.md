@@ -246,3 +246,5 @@ Go のサイトサーバーは `/`・`/channels/<id>`・`/broadcast`・`/admin` 
 `audit.enabled`でログイン、キー操作、配信枠と実受信区間を記録する。[保存・運用仕様](audit.md)。通常の構成ではサイト管理APIは権限・Origin・CSRF確認後に同一プロセスのJSON-RPCハンドラーを呼び、検証済み操作者をcontextで渡す。HTTPでの身元指定ヘッダーは受け付けない。
 
 管理者限定の`GET {base_path}/site/api/audit/status`は記録の有効・劣化状態とスプール量・欠落件数を返す。未認証401、一般ユーザーと開発ログイン403。履歴本文は公開しない。
+
+管理パネルの「ログ」から、X管理者だけが操作ログ・配信履歴・RTMP受信区間を検索できる。閲覧用GET APIは`/site/api/audit/events`、`/site/api/audit/broadcasts`、`/site/api/audit/broadcasts/{id}/inputs`。[検索条件・ページ送り・公開項目](audit.md#管理パネルでの閲覧)。一般ユーザーと開発ログインには履歴を公開しない。

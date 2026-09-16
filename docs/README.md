@@ -47,6 +47,7 @@ peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp
 
 - [2026-09-14-site-base-path.md](reviews/2026-09-14-site-base-path.md) — `/mi/` 配置、OAuth・UI・Dockerとインフラ設定のローカル検証
 
+- [2026-09-17-admin-audit-history.md](reviews/2026-09-17-admin-audit-history.md) — 管理者用の履歴API・検索画面の検証
 - [2026-09-16-audit-implementation.md](reviews/2026-09-16-audit-implementation.md) — MariaDB実機と記録経路の検証
 - [2026-09-15-audit-design-0yp.md](reviews/2026-09-15-audit-design-0yp.md) — ログイン・配信履歴設計に向けた0ypのスキーマ・recorder比較
 - [2026-09-15-broadcast-track-creator.md](reviews/2026-09-15-broadcast-track-creator.md) — pcgw の作成元IP設定とプロキシ経由のIP判定
