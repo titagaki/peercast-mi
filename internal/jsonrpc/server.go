@@ -12,6 +12,7 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
+	"github.com/titagaki/peercast-mi/internal/audit"
 	"github.com/titagaki/peercast-mi/internal/catalog"
 	"github.com/titagaki/peercast-mi/internal/channel"
 	"github.com/titagaki/peercast-mi/internal/config"
@@ -36,6 +37,7 @@ type ChannelManager interface {
 
 // Server handles JSON-RPC 2.0 requests at POST /api/1.
 type Server struct {
+	actor     audit.Actor
 	catalog   *catalog.Catalog
 	sessionID pcp.GnuID
 	mgr       ChannelManager
@@ -100,7 +102,21 @@ func (s *Server) Handler() http.Handler {
 		}
 
 		slog.Debug("jsonrpc: request", "remote", r.RemoteAddr, "method", req.Method)
-		result, rpcErr := s.dispatch(req.Method, req.Params)
+		requestServer := *s
+		requestServer.actor = audit.Actor{Source: "admin", IP: audit.IP(r.RemoteAddr)}
+		if !isLocalhost(r.RemoteAddr) {
+			requestServer.actor.Account = "admin:basic"
+		}
+		if a, ok := audit.ContextActor(r.Context()); ok {
+			requestServer.actor = a
+		}
+		result, rpcErr := requestServer.dispatch(req.Method, req.Params)
+		if rpcErr != nil {
+			kind := map[string]string{"broadcastChannel": "broadcast.create", "stopChannel": "broadcast.end", "setChannelInfo": "broadcast.metadata", "issueStreamKey": "key.issue", "revokeStreamKey": "key.revoke"}[req.Method]
+			if kind != "" {
+				requestServer.auditEvent(audit.Event{Type: kind, Outcome: "failure", Reason: "operation_rejected"})
+			}
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]interface{}{
@@ -269,4 +285,11 @@ func (s *Server) lookupChannel(chanIDStr string) (*channel.Channel, bool) {
 
 func gnuIDString(id pcp.GnuID) string {
 	return hex.EncodeToString(id[:])
+}
+
+func (s *Server) auditEvent(e audit.Event) {
+	e.Actor = s.actor
+	if m, ok := s.mgr.(interface{ AuditSink() audit.Sink }); ok {
+		audit.Send(m.AuditSink(), e)
+	}
 }

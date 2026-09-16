@@ -16,13 +16,15 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o peercast-mi .
 
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o audit-migrate ./cmd/audit-migrate
+
 FROM alpine:3.21
 
 RUN addgroup -S -g 10001 peercast && adduser -S -u 10001 peercast -G peercast
 
 WORKDIR /app
 
-COPY --from=builder /app/peercast-mi .
+COPY --from=builder /app/peercast-mi /app/audit-migrate ./
 COPY --from=ui-builder /ui/dist ./ui/dist
 RUN mkdir /config && chown peercast:peercast /config
 

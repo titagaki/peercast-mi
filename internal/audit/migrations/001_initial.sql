@@ -1,9 +1,5 @@
--- Historical design snapshot. Authoritative migration: ../../internal/audit/migrations/001_initial.sql
--- DESIGN DRAFT 2026-09-15. Not an application migration; not deployed.
--- Run only in a dedicated peercast_mi database after version/DDL validation.
--- All application timestamps are UTC. IDs are random 128-bit lowercase hex.
-
-CREATE TABLE audit_events (
+-- Migration 1. UTC timestamps; dedicated peercast_mi database only.
+CREATE TABLE IF NOT EXISTS audit_events (
     event_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     node_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     boot_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -35,7 +31,7 @@ CREATE TABLE audit_events (
     KEY ix_event_session (session_ref, occurred_at, event_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE broadcasts (
+CREATE TABLE IF NOT EXISTS broadcasts (
     broadcast_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     node_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     boot_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -72,7 +68,7 @@ CREATE TABLE broadcasts (
     KEY ix_broadcast_retention (status, ended_at, interruption_detected_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE broadcast_inputs (
+CREATE TABLE IF NOT EXISTS broadcast_inputs (
     input_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     broadcast_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     connection_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -92,7 +88,7 @@ CREATE TABLE broadcast_inputs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Deployment tooling owns this table. Runtime credentials cannot perform DDL.
-CREATE TABLE schema_migrations (
+CREATE TABLE IF NOT EXISTS schema_migrations (
     version BIGINT UNSIGNED NOT NULL,
     checksum CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),

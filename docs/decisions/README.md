@@ -44,4 +44,5 @@
 | [0029](0029-broadcast-history.md) | 配信フォームの履歴保存と掲示板参照 | 採用 |
 | [0030](0030-site-yp-listener-count.md) | 一覧・視聴ページの視聴人数は YP の値で統一する | 採用 |
 | [0031](0031-broadcast-track-creator.md) | サイト配信のトラック作成者に接続元IPを設定する | 採用 |
+| [0032](0032-site-audit-mariadb.md) | ログイン・配信履歴を専用MariaDBへ非同期保存する | 採用 |
 | [peercaststation-compat](peercaststation-compat.md) | PeerCastStation との挙動合わせ (複数項目) | 採用 |

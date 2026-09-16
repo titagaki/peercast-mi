@@ -7,7 +7,8 @@
 
 ## 未着手
 
-- [ ] ログイン・配信履歴のMariaDB保存を設計確定後に実装する — [設計案・テーブル定義](design/site-audit.md)。2026-09-15 は設計のみ。DB実バージョン確認・DDL検証・本番適用は未実施。
+- [ ] 監査DBの本番導入 — 専用DB・権限作成、明示migration、接続・バックアップ運用確認。[仕様](spec/audit.md)。ローカルMariaDB 11.4での実装検証済み。
+- [ ] 管理者向けログイン・配信履歴の検索画面 — 保存と状態APIは実装済み。現在はSQLで参照。
 
 ### 互換性・検証
 
@@ -65,3 +66,7 @@
 - [x] 2026-09-13 `Channel` から下流ノード情報を `nodeTable` (`channel/nodes.go`) に分離
 - [x] 2026-09-13 仕様書を実装に合わせて全面更新、docs を spec / decisions / reference / tasks に再編 — [decisions/0013](decisions/0013-docs-follow-code.md)
 - [x] 2026-09-13 環境依存で遅い・落ちるテストの修正 (`relay`、`yp` の `127.0.0.1:1` 依存と `Stop()` の 3 秒待ち)
+
+## 2026-09-16 完了
+
+- [x] ログイン・配信履歴のMariaDB保存、スプール再送、復旧照合、保持期限、管理状態API — [ADR 0032](decisions/0032-site-audit-mariadb.md)、[検証記録](reviews/2026-09-16-audit-implementation.md)。

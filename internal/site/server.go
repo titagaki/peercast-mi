@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/titagaki/peercast-mi/internal/audit"
 	"io"
 	"net"
 	"net/http"
@@ -40,6 +41,8 @@ type user struct {
 	Name string `json:"name"`
 }
 type session struct {
+	AuditRef string
+
 	User    user
 	CSRF    string
 	Expires time.Time
@@ -60,6 +63,7 @@ type Server struct {
 	bump                                func()
 	clientID, clientSecret, viewerToken string
 	adminIDs                            map[string]bool
+	adminHandler                        http.Handler
 	adminProxy                          *httputil.ReverseProxy
 	client                              *http.Client
 	tokenURL, meURL                     string
@@ -278,6 +282,7 @@ func (s *Server) Handler() http.Handler {
 	protected("GET /site/api/channels", s.channels)
 	protected("GET /site/api/directory", s.directory)
 	protected("GET /site/api/channels/{id}/comments", s.comments)
+	protected("GET /site/api/audit/status", s.auditStatus)
 	protected("GET /site/api/broadcast", s.broadcastInfo)
 	protected("GET /site/api/broadcast/board", s.broadcastBoard)
 	protected("POST /site/api/key", s.rotateKey)
@@ -352,6 +357,22 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
+	aw := &auditResponse{ResponseWriter: w, code: 200}
+	w = aw
+	outcome, failureReason := "failure", "invalid_callback"
+	defer func() {
+		if aw.code >= 400 {
+			reason := failureReason
+			if aw.code == 503 {
+				reason = "session_capacity"
+			}
+			if aw.code == 502 {
+				reason = "oauth_exchange_failed"
+			}
+			audit.Send(s.mgr.Audit, audit.Event{Type: "auth.login", Actor: s.auditActor(r, nil), Outcome: outcome, Reason: reason})
+		}
+	}()
+
 	c, err := r.Cookie(flowCookie)
 	if err != nil {
 		http.Error(w, "ログインを最初からやり直してください。", 400)
@@ -362,7 +383,11 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	delete(s.flows, c.Value)
 	s.mu.Unlock()
 	s.cookie(w, flowCookie, "", -1)
-	if !ok || !time.Now().Before(f.Expires) || subtle.ConstantTimeCompare([]byte(f.State), []byte(r.URL.Query().Get("state"))) != 1 || r.URL.Query().Get("code") == "" || r.URL.Query().Get("error") != "" {
+	validFlow := ok && time.Now().Before(f.Expires) && subtle.ConstantTimeCompare([]byte(f.State), []byte(r.URL.Query().Get("state"))) == 1
+	if validFlow && r.URL.Query().Get("error") == "access_denied" {
+		outcome, failureReason = "cancelled", "user_cancelled"
+	}
+	if !validFlow || r.URL.Query().Get("code") == "" || r.URL.Query().Get("error") != "" {
 		http.Error(w, "ログインが中止されたか、期限が切れました。", 400)
 		return
 	}
@@ -379,6 +404,13 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 // Development login still creates an ordinary session: ownership, CSRF,
 // viewer limits and the media gate are not bypassed.
 func (s *Server) developmentLogin(w http.ResponseWriter, r *http.Request) {
+	aw := &auditResponse{ResponseWriter: w, code: 200}
+	w = aw
+	defer func() {
+		if aw.code >= 400 {
+			audit.Send(s.mgr.Audit, audit.Event{Type: "auth.login", Actor: s.auditActor(r, nil), Outcome: "failure", Reason: "development_login_rejected"})
+		}
+	}()
 	if r.Header.Get("Origin") != s.cfg.Origin {
 		http.Error(w, "開発用ログインはサイト画面のボタンから行ってください。", 403)
 		return
@@ -403,7 +435,9 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, u user) bo
 		}
 	}
 	id := randomToken()
-	s.sessions[id] = &session{u, randomToken(), time.Now().Add(sessionTTL), make(chan struct{})}
+	ss := &session{User: u, CSRF: randomToken(), Expires: time.Now().Add(sessionTTL), Done: make(chan struct{}), AuditRef: audit.ID()}
+	s.sessions[id] = ss
+	audit.Send(s.mgr.Audit, audit.Event{Type: "auth.login", Actor: s.auditActor(r, ss), Outcome: "success"})
 	s.cookie(w, sessionCookie, id, int(sessionTTL.Seconds()))
 	return true
 }
@@ -454,6 +488,7 @@ func (s *Server) requestJSON(req *http.Request, v any) error {
 	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(v)
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request, ss *session) {
+	audit.Send(s.mgr.Audit, audit.Event{Type: "auth.logout", Actor: s.auditActor(r, ss), Outcome: "success"})
 	c, _ := r.Cookie(sessionCookie)
 	s.mu.Lock()
 	if current := s.sessions[c.Value]; current != nil {

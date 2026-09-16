@@ -91,3 +91,10 @@ rtmp_url = "rtmp://localhost:1945/live"
 # max_relay_channels = 8
 # X認証の資格情報は環境変数 PEERCAST_X_CLIENT_ID / PEERCAST_X_CLIENT_SECRET。
 # dev_login=falseでサイトを有効にする場合に必要。TOMLには記載しない。
+
+# ログイン・配信履歴。開発用DBを別途用意する場合だけ有効化する。
+# 接続資格情報とmigration: docs/spec/audit.md
+[audit]
+enabled = false
+node_id = "mi-local"
+retention_days = 90

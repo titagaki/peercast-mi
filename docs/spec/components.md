@@ -827,3 +827,7 @@ API の詳細仕様 (メソッド一覧・リクエスト/レスポンス形式�
 ## 公開IPv4の明示指定
 
 トップレベル `public_ipv4` は公開IPv4リテラルを指定する。省略時はOLEHの観測値を使う。指定時は共有NetworkStateがHOSTの第1IP（公開側）に設定値を使い、第2IP（ローカル側）は接続元のローカルIPを使う。YP向けBCSTと下流向けHOSTで共有する。OLEHの観測値を保存し続け、ポートのknown/openとIPv6の自動判定は維持する。ポートはpeercast_portを使うためNATの内外で同じ番号を転送する。ホスト名・非IPv4・private/loopback/multicast/unspecifiedは起動時に拒否する。設定変更は再起動で反映する。
+
+## 操作・配信履歴
+
+`channel.Manager`の作成・停止と`Channel.SetInfo`、RTMPのPublish・データ書込・切断が`internal/audit`へ通知する。有効時だけ配信インスタンス単位のRunを持ち、リレーは対象外。旧インスタンスに結び付いたRTMP切断は再作成済みの新インスタンスを停止しない。DBとスプールへのI/Oは非同期writerで行う。[詳細仕様](audit.md)。

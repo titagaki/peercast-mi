@@ -18,6 +18,8 @@
 - [ui.md](spec/ui.md) — 管理 UI の画面、通信・更新操作、アクセシビリティ
 - [site.md](spec/site.md) — X 認証付き視聴・配信サイトの設定、API、帯域・所有権制御
 
+- [audit.md](spec/audit.md) — ログイン・配信履歴、MariaDB移行、スプール・復旧・保持
+
 ## decisions/
 
 番号付きの ADR (`NNNN-slug.md`) と、PeerCastStation との挙動合わせをまとめた [peercaststation-compat.md](decisions/peercaststation-compat.md)。一覧と書き方は [decisions/README.md](decisions/README.md)。
@@ -45,6 +47,7 @@ peercast-pcp ライブラリの API は `go doc github.com/titagaki/peercast-pcp
 
 - [2026-09-14-site-base-path.md](reviews/2026-09-14-site-base-path.md) — `/mi/` 配置、OAuth・UI・Dockerとインフラ設定のローカル検証
 
+- [2026-09-16-audit-implementation.md](reviews/2026-09-16-audit-implementation.md) — MariaDB実機と記録経路の検証
 - [2026-09-15-audit-design-0yp.md](reviews/2026-09-15-audit-design-0yp.md) — ログイン・配信履歴設計に向けた0ypのスキーマ・recorder比較
 - [2026-09-15-broadcast-track-creator.md](reviews/2026-09-15-broadcast-track-creator.md) — pcgw の作成元IP設定とプロキシ経由のIP判定
 - [2026-09-15-broadcast-form.md](reviews/2026-09-15-broadcast-form.md) — pcgw を参考にしたチャンネル作成・履歴・新スレ移動

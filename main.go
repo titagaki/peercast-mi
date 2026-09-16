@@ -14,6 +14,7 @@ import (
 
 	"github.com/titagaki/peercast-pcp/pcp"
 
+	"github.com/titagaki/peercast-mi/internal/audit"
 	"github.com/titagaki/peercast-mi/internal/channel"
 	"github.com/titagaki/peercast-mi/internal/config"
 	"github.com/titagaki/peercast-mi/internal/id"
@@ -55,6 +56,21 @@ func main() {
 	slog.Info("startup", "session_id", sessionID, "broadcast_id", broadcastID)
 
 	mgr := channel.NewManager(broadcastID)
+	var recorder *audit.Recorder
+	if cfg.Audit.Enabled {
+		if cfg.Audit.SpoolDir == "" {
+			cfg.Audit.SpoolDir = filepath.Join(filepath.Dir(*configPath), "site-data", "audit")
+		}
+		db, openErr := audit.OpenMySQL()
+		if openErr != nil {
+			slog.Error("audit: database environment incomplete; events will remain in spool")
+		} else {
+			defer db.DB.Close()
+		}
+		recorder = audit.New(audit.Options{Node: cfg.Audit.NodeID, Dir: cfg.Audit.SpoolDir, Retention: time.Duration(cfg.Audit.RetentionDays) * 24 * time.Hour}, db)
+		mgr.Audit = recorder
+	}
+
 	if cfg.PublicIPv4 != "" {
 		mgr.Network.SetPublicIPv4(net.ParseIP(cfg.PublicIPv4))
 		slog.Info("network: explicit public IPv4", "address", cfg.PublicIPv4)
@@ -89,6 +105,7 @@ func main() {
 	listener.RelayRequestFromAny = relayFromAny
 	// Configure the website's HTTP viewing gate before accepting any traffic.
 	var website *site.Server
+	var siteHTTP *http.Server
 	if cfg.Site.Enabled {
 		// Keep history on the same persistent volume as configuration and keys.
 		if cfg.Site.BroadcastHistoryDir == "" {
@@ -174,6 +191,7 @@ func main() {
 	slog.Info("api: JSON-RPC ready", "port", cfg.PeercastPort)
 	if website != nil {
 		website.SetCatalog(apiServer.Catalog())
+		website.SetAdminHandler(apiServer.Handler())
 		website.SetBump(func() {
 			if ypBumper != nil {
 				ypBumper.Bump()
@@ -185,6 +203,7 @@ func main() {
 			os.Exit(1)
 		}
 		srv := &http.Server{Handler: website.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+		siteHTTP = srv
 		go func() {
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				slog.Error("site: server stopped", "err", err)
@@ -219,7 +238,21 @@ func main() {
 	<-ctx.Done()
 
 	slog.Info("shutting down")
+	if siteHTTP != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := siteHTTP.Shutdown(shutdownCtx); err != nil {
+			siteHTTP.Close()
+		}
+		cancel()
+	}
 	rtmpServer.Close()
 	listener.Close()
 	mgr.StopAll()
+	if recorder != nil {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := recorder.Close(flushCtx); err != nil {
+			slog.Error("audit: shutdown flush timed out")
+		}
+		cancel()
+	}
 }

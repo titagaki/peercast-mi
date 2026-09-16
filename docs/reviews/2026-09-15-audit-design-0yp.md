@@ -2,6 +2,8 @@
 
 2026-09-15。設計のみ。mi実装・0yp実装・本番DBの変更は行わない。
 
+2026-09-16追記: mi側の実装・MariaDB検証は [実装検証](2026-09-16-audit-implementation.md) に記録。以下は設計時点の調査として残す。
+
 ## 参照範囲
 
 - peercast-0yp: `/home/megan/src/go/peercast-0yp`、コミット `c278834849977b4c725eaad85626b75fe5bf7b51`、作業ツリーclean。

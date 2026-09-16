@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/titagaki/peercast-mi/internal/audit"
 	"github.com/titagaki/peercast-mi/internal/pcputil"
 	"github.com/titagaki/peercast-pcp/pcp"
 )
@@ -78,6 +79,8 @@ type ConnectionInfo struct {
 
 // Channel is the central data structure for an active broadcast.
 type Channel struct {
+	AuditRun *audit.Run // immutable after publication; nil for relays/disabled audit
+
 	Network      *pcputil.NetworkState // immutable pointer, shared by the node
 	lastReceived atomic.Int64
 	upstreamBcst func(*pcp.Atom)
@@ -210,9 +213,11 @@ func (c *Channel) Track() TrackInfo {
 }
 
 // SetInfo updates ChannelInfo and notifies outputs.
-func (c *Channel) SetInfo(info ChannelInfo) {
+func (c *Channel) SetInfo(info ChannelInfo) { c.SetInfoWithAudit(info, audit.Actor{Source: "system"}) }
+func (c *Channel) SetInfoWithAudit(info ChannelInfo, a audit.Actor) {
 	c.mu.Lock()
 	c.info = info
+	c.AuditRun.Metadata(a, AuditSettings(info))
 	outputs := append([]OutputStream(nil), c.outputs...)
 	c.mu.Unlock()
 	for _, o := range outputs {

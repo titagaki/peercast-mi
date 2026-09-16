@@ -1,12 +1,14 @@
 package channel
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 
+	"github.com/titagaki/peercast-mi/internal/audit"
 	"github.com/titagaki/peercast-pcp/pcp"
 
 	"github.com/titagaki/peercast-mi/internal/id"
@@ -42,6 +44,8 @@ type RelayFactory func(ch *Channel, upstreamAddr string) RelayHandle
 //	Stop(channelID) → channel removed, streamKey still valid
 //	RevokeStreamKey(accountName) → key invalidated, active channels NOT stopped
 type Manager struct {
+	Audit audit.Sink // configured before serving
+
 	Network *pcputil.NetworkState
 	// Limits are configured before channels are started.
 	MaxRelays, MaxListeners, MaxRelaysTotal, MaxUpstreamKbps int
@@ -115,6 +119,21 @@ func (m *Manager) ListStreamKeys() []StreamKeyEntry { return m.keys.List() }
 // The channel ID is deterministically derived from the inputs, so calling
 // Broadcast again with identical arguments after stopping yields the same ID.
 func (m *Manager) Broadcast(streamKey string, info ChannelInfo, track TrackInfo) (*Channel, error) {
+	return m.BroadcastWithAudit(streamKey, info, track, audit.Actor{Source: "admin"}, nil, false)
+}
+func (m *Manager) AuditSink() audit.Sink { return m.Audit }
+func (m *Manager) StreamKeyOwner(key string) string {
+	for _, entry := range m.keys.List() {
+		if entry.StreamKey == key {
+			return entry.AccountName
+		}
+	}
+	return ""
+}
+func AuditSettings(info ChannelInfo) audit.Settings {
+	return audit.Settings{Name: info.Name, Genre: info.Genre, Description: info.Desc, Comment: info.Comment, ContactURL: info.URL, Bitrate: info.Bitrate, ContentType: info.Type}
+}
+func (m *Manager) BroadcastWithAudit(streamKey string, info ChannelInfo, track TrackInfo, actor audit.Actor, inputGenre *string, pending bool) (*Channel, error) {
 	if !m.keys.IsIssuedKey(streamKey) {
 		return nil, fmt.Errorf("stream key not issued")
 	}
@@ -131,6 +150,9 @@ func (m *Manager) Broadcast(streamKey string, info ChannelInfo, track TrackInfo)
 	ch.isBroadcasting = true
 	ch.info = info
 	ch.track = track
+	settings := AuditSettings(info)
+	settings.InputGenre = inputGenre
+	ch.AuditRun = audit.NewRun(m.Audit, hex.EncodeToString(channelID[:]), m.StreamKeyOwner(streamKey), actor, settings, pending)
 	m.byID[channelID] = ch
 	m.byStreamKey[streamKey] = ch
 	m.streamKeyByID[channelID] = streamKey
@@ -141,9 +163,18 @@ func (m *Manager) Broadcast(streamKey string, info ChannelInfo, track TrackInfo)
 // The associated stream key remains valid for future broadcasts.
 // Returns false if no active channel with that ID exists.
 func (m *Manager) Stop(channelID pcp.GnuID) bool {
+	return m.StopWithAudit(channelID, audit.Actor{Source: "admin"}, "admin_stop")
+}
+func (m *Manager) StopWithAudit(channelID pcp.GnuID, a audit.Actor, reason string) bool {
+	return m.stopInstance(channelID, nil, a, reason)
+}
+func (m *Manager) StopInstance(ch *Channel, a audit.Actor, reason string) bool {
+	return m.stopInstance(ch.ID, ch, a, reason)
+}
+func (m *Manager) stopInstance(channelID pcp.GnuID, expected *Channel, a audit.Actor, reason string) bool {
 	m.mu.Lock()
 	ch, ok := m.byID[channelID]
-	if !ok {
+	if !ok || (expected != nil && expected != ch) {
 		m.mu.Unlock()
 		return false
 	}
@@ -157,6 +188,7 @@ func (m *Manager) Stop(channelID pcp.GnuID) bool {
 	if relay != nil {
 		relay.Stop()
 	}
+	ch.AuditRun.End(a, reason)
 	ch.CloseAll()
 	return true
 }
@@ -181,6 +213,7 @@ func (m *Manager) StopAll() {
 		r.Stop()
 	}
 	for _, ch := range channels {
+		ch.AuditRun.End(audit.Actor{Source: "system"}, "server_shutdown")
 		ch.CloseAll()
 	}
 }

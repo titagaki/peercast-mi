@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/titagaki/peercast-mi/internal/audit"
 	"io"
 	"log/slog"
 	"net"
 	"regexp"
 	"strconv"
+	"sync/atomic"
 
 	goamf0 "github.com/yutopp/go-amf0"
 	gortmp "github.com/yutopp/go-rtmp"
@@ -28,6 +30,7 @@ type ChannelManager interface {
 
 // Server listens for RTMP push connections from an encoder.
 type Server struct {
+	closing  atomic.Bool
 	srv      *gortmp.Server
 	port     int
 	listener net.Listener
@@ -45,6 +48,7 @@ func NewServer(mgr ChannelManager, port int) *Server {
 			slog.Info("rtmp: encoder connected", "remote", conn.RemoteAddr())
 			h := newHandler(mgr, conn.RemoteAddr().String())
 			h.publishLimiter = attempts
+			h.shuttingDown = &s.closing
 			return conn, &gortmp.ConnConfig{Handler: h}
 		},
 	})
@@ -68,6 +72,7 @@ func (s *Server) Serve() error {
 
 // Close shuts down the RTMP server.
 func (s *Server) Close() {
+	s.closing.Store(true)
 	s.srv.Close()
 }
 
@@ -76,6 +81,11 @@ func (s *Server) Close() {
 // ---------------------------------------------------------------------------
 
 type handler struct {
+	shuttingDown *atomic.Bool
+	auditSink    audit.Sink
+	connectionID string
+	inputChannel *channel.Channel
+
 	gortmp.DefaultHandler
 	mgr            ChannelManager
 	remoteAddr     string
@@ -101,7 +111,11 @@ type handler struct {
 }
 
 func newHandler(mgr ChannelManager, remoteAddr string) *handler {
-	return &handler{mgr: mgr, remoteAddr: remoteAddr}
+	h := &handler{mgr: mgr, remoteAddr: remoteAddr, connectionID: audit.ID()}
+	if m, ok := mgr.(interface{ AuditSink() audit.Sink }); ok {
+		h.auditSink = m.AuditSink()
+	}
+	return h
 }
 
 // ch returns the active channel for this connection's stream key, or nil if
@@ -126,13 +140,16 @@ func (h *handler) ch() *channel.Channel {
 func (h *handler) OnPublish(_ *gortmp.StreamContext, _ uint32, cmd *message.NetStreamPublish) error {
 	key := cmd.PublishingName
 	if isShortStreamKey(key) && h.publishLimiter != nil && !h.publishLimiter.allow(h.remoteAddr) {
+		h.recordPublish("failure", "rate_limited", "")
 		return fmt.Errorf("rtmp: too many short-key attempts; retry in one minute")
 	}
 	if !h.mgr.IsIssuedKey(key) {
+		h.recordPublish("failure", "unknown_key", "")
 		slog.Warn("rtmp: rejected unknown stream key", "remote", h.remoteAddr)
 		return fmt.Errorf("rtmp: stream key not issued")
 	}
 	h.streamKey = key
+	h.recordPublish("success", "", key)
 	slog.Info("rtmp: stream key accepted", "remote", h.remoteAddr)
 	return nil
 }
@@ -199,6 +216,13 @@ func (h *handler) OnAudio(timestamp uint32, payload io.Reader) error {
 
 func (h *handler) OnClose() {
 	slog.Info("rtmp: encoder disconnected", "remote", h.remoteAddr)
+	reason := "encoder_disconnect"
+	if h.shuttingDown != nil && h.shuttingDown.Load() {
+		reason = "server_shutdown"
+	}
+	if h.inputChannel != nil {
+		h.inputChannel.AuditRun.EndInput(h.connectionID, reason)
+	}
 	if h.streamKey == "" {
 		return
 	}
@@ -207,7 +231,16 @@ func (h *handler) OnClose() {
 		return
 	}
 	slog.Info("rtmp: stopping channel on encoder disconnect", "channel_id", ch.ID)
-	h.mgr.Stop(ch.ID)
+	if h.inputChannel != nil && h.inputChannel != ch {
+		return
+	}
+	if m, ok := h.mgr.(interface {
+		StopInstance(*channel.Channel, audit.Actor, string) bool
+	}); ok {
+		m.StopInstance(ch, audit.Actor{Source: "rtmp", IP: h.remoteAddr}, reason)
+	} else {
+		h.mgr.Stop(ch.ID)
+	}
 }
 
 // rebuildHeader assembles the FLV head packet from accumulated sequence headers
@@ -288,6 +321,10 @@ func (h *handler) rebuildHeader() {
 func (h *handler) writeData(tag []byte, contFlags byte) {
 	h.applyMetaInfo()
 	ch := h.ch()
+	if h.inputChannel != nil && h.inputChannel != ch {
+		h.inputChannel.AuditRun.EndInput(h.connectionID, "target_changed")
+		h.inputChannel = nil
+	}
 	if ch == nil {
 		return
 	}
@@ -302,6 +339,26 @@ func (h *handler) writeData(tag []byte, contFlags byte) {
 	pos := h.streamPos
 	h.streamPos += uint32(len(data))
 	ch.Write(data, pos, contFlags)
+	h.inputChannel = ch
+	if isMediaTag(tag) {
+		ch.AuditRun.Media(h.connectionID, h.remoteAddr)
+	}
+}
+
+// Transport still receives every data tag, but codec control packets are not
+// evidence that audio/video media arrived (notably AVC end-of-sequence).
+func isMediaTag(tag []byte) bool {
+	if len(tag) < 13 {
+		return false
+	}
+	switch tag[0] {
+	case 9:
+		return tag[11]&0x0f != 7 || (tag[12] == 1 && len(tag) > 16)
+	case 8:
+		return tag[11]>>4 != 10 || (tag[12] == 1 && len(tag) > 13)
+	default:
+		return false
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -428,4 +485,14 @@ func parseMaxBitrate(v interface{}) (float64, bool) {
 		}
 	}
 	return 0, false
+}
+
+func (h *handler) recordPublish(outcome, reason, key string) {
+	owner := ""
+	if key != "" {
+		if m, ok := h.mgr.(interface{ StreamKeyOwner(string) string }); ok {
+			owner = m.StreamKeyOwner(key)
+		}
+	}
+	audit.Send(h.auditSink, audit.Event{Type: "rtmp.publish", Actor: audit.Actor{Source: "rtmp", IP: h.remoteAddr}, Owner: owner, Outcome: outcome, Reason: reason, ConnectionID: h.connectionID})
 }

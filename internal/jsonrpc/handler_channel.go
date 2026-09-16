@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/titagaki/peercast-pcp/pcp"
 
+	"github.com/titagaki/peercast-mi/internal/audit"
 	"github.com/titagaki/peercast-mi/internal/channel"
 )
 
@@ -139,9 +140,17 @@ func (s *Server) issueStreamKey(params json.RawMessage) (interface{}, *rpcError)
 	if accountName == "" || streamKey == "" {
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: "accountName and streamKey must not be empty"}
 	}
+	kind := "key.issue"
+	for _, entry := range s.mgr.ListStreamKeys() {
+		if entry.AccountName == accountName {
+			kind = "key.rotate"
+			break
+		}
+	}
 	if err := s.mgr.IssueStreamKey(accountName, streamKey); err != nil {
 		return nil, &rpcError{Code: errCodeInternal, Message: err.Error()}
 	}
+	s.auditEvent(audit.Event{Type: kind, Owner: accountName, Outcome: "success"})
 	return nil, nil
 }
 
@@ -167,6 +176,7 @@ func (s *Server) revokeStreamKey(params json.RawMessage) (interface{}, *rpcError
 	if !s.mgr.RevokeStreamKey(accountName) {
 		return nil, &rpcError{Code: errCodeInternal, Message: "account not found"}
 	}
+	s.auditEvent(audit.Event{Type: "key.revoke", Owner: accountName, Outcome: "success"})
 	return nil, nil
 }
 
@@ -204,7 +214,15 @@ func (s *Server) broadcastChannel(params json.RawMessage) (interface{}, *rpcErro
 		Album:   p.Track.Album,
 	}
 
-	ch, err := s.mgr.Broadcast(streamKey, info, track)
+	var ch *channel.Channel
+	var err error
+	if m, ok := s.mgr.(interface {
+		BroadcastWithAudit(string, channel.ChannelInfo, channel.TrackInfo, audit.Actor, *string, bool) (*channel.Channel, error)
+	}); ok {
+		ch, err = m.BroadcastWithAudit(streamKey, info, track, s.actor, nil, false)
+	} else {
+		ch, err = s.mgr.Broadcast(streamKey, info, track)
+	}
 	if err != nil {
 		return nil, &rpcError{Code: errCodeInvalidParams, Message: err.Error()}
 	}
@@ -283,7 +301,7 @@ func (s *Server) setChannelInfo(params json.RawMessage) (interface{}, *rpcError)
 	if infoArg.Bitrate > 0 {
 		cur.Bitrate = infoArg.Bitrate
 	}
-	ch.SetInfo(cur)
+	ch.SetInfoWithAudit(cur, s.actor)
 
 	ch.SetTrack(channel.TrackInfo{
 		Title:   trackArg.Title,
@@ -295,7 +313,13 @@ func (s *Server) setChannelInfo(params json.RawMessage) (interface{}, *rpcError)
 }
 
 func (s *Server) stopChannel(ch *channel.Channel) (interface{}, *rpcError) {
-	s.mgr.Stop(ch.ID)
+	if m, ok := s.mgr.(interface {
+		StopInstance(*channel.Channel, audit.Actor, string) bool
+	}); ok {
+		m.StopInstance(ch, s.actor, "admin_stop")
+	} else {
+		s.mgr.Stop(ch.ID)
+	}
 	return nil, nil
 }
 

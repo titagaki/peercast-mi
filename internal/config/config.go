@@ -39,6 +39,7 @@ func (y *YP) HostPort() (string, error) {
 
 type Config struct {
 	PublicIPv4   string `toml:"public_ipv4"` // Explicit advertised address for NAT/container deployments.
+	Audit        Audit  `toml:"audit"`
 	Site         Site   `toml:"site"`
 	RTMPPort     int    `toml:"rtmp_port"`
 	PeercastPort int    `toml:"peercast_port"`
@@ -77,6 +78,14 @@ type Config struct {
 	// のオリジンは常に許可される。それ以外のオリジンからの要求は 403 で拒否する。
 	AllowedOrigins []string `toml:"allowed_origins"`
 	YPs            []YP     `toml:"yp"`
+}
+
+// Audit is optional operational history. Credentials are environment-only.
+type Audit struct {
+	Enabled       bool   `toml:"enabled"`
+	NodeID        string `toml:"node_id"`
+	SpoolDir      string `toml:"spool_dir"`
+	RetentionDays int    `toml:"retention_days"`
 }
 
 // Site is opt-in; secrets are read from the named process environment variables.
@@ -150,6 +159,19 @@ func Load(path string) (*Config, error) {
 		ip := net.ParseIP(cfg.PublicIPv4)
 		if ip == nil || ip.To4() == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() {
 			return nil, fmt.Errorf("config: public_ipv4 must be a public IPv4 literal")
+		}
+	}
+	if cfg.Audit.Enabled {
+		if len(cfg.Audit.NodeID) == 0 || len(cfg.Audit.NodeID) > 64 || strings.ContainsAny(cfg.Audit.NodeID, " \t\r\n") {
+			return nil, fmt.Errorf("config: audit.node_id must be 1-64 ASCII letters, digits, dots, underscores or hyphens")
+		}
+		for _, c := range cfg.Audit.NodeID {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+				return nil, fmt.Errorf("config: invalid audit.node_id")
+			}
+		}
+		if cfg.Audit.RetentionDays < 0 || cfg.Audit.RetentionDays > 36500 {
+			return nil, fmt.Errorf("config: audit.retention_days must be 0-36500 (0 uses 90)")
 		}
 	}
 	return &cfg, nil

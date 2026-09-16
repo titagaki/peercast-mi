@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/titagaki/peercast-mi/internal/audit"
 	"github.com/titagaki/peercast-mi/internal/channel"
 )
 
@@ -81,6 +82,22 @@ func (s *Server) broadcastInfo(w http.ResponseWriter, r *http.Request, ss *sessi
 func (s *Server) rotateKey(w http.ResponseWriter, r *http.Request, ss *session) {
 	s.mutate.Lock()
 	defer s.mutate.Unlock()
+	eventType := "key.issue"
+	if s.key(ss) != "" {
+		eventType = "key.rotate"
+	}
+	aw := &auditResponse{ResponseWriter: w, code: 200}
+	w = aw
+	defer func() {
+		outcome := "success"
+		reason := ""
+		if aw.code >= 400 {
+			outcome = "failure"
+			reason = "operation_rejected"
+		}
+		audit.Send(s.mgr.Audit, audit.Event{Type: eventType, Actor: s.auditActor(r, ss), Owner: account(ss), Outcome: outcome, Reason: reason})
+	}()
+
 	old := s.key(ss)
 	if _, active := s.mgr.GetByStreamKey(old); active {
 		http.Error(w, "配信を停止してからキーを再発行してください。", 409)
@@ -98,6 +115,15 @@ func (s *Server) rotateKey(w http.ResponseWriter, r *http.Request, ss *session) 
 	reply(w, map[string]string{"streamKey": key})
 }
 func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, ss *session) {
+	aw := &auditResponse{ResponseWriter: w, code: 200}
+	w = aw
+	tracked := false
+	defer func() {
+		if aw.code >= 400 && !tracked {
+			audit.Send(s.mgr.Audit, audit.Event{Type: "broadcast.create", Actor: s.auditActor(r, ss), Owner: account(ss), Outcome: "failure", Reason: "operation_rejected"})
+		}
+	}()
+
 	var input struct {
 		Name        string `json:"name"`
 		Genre       string `json:"genre"`
@@ -156,16 +182,18 @@ func (s *Server) broadcast(w http.ResponseWriter, r *http.Request, ss *session) 
 		http.Error(w, "接続元IPを確認できませんでした。", 400)
 		return
 	}
-	ch, err := s.mgr.Broadcast(key, channel.ChannelInfo{Name: input.Name, Genre: input.Genre, Desc: input.Description, Comment: input.Comment, URL: input.ContactURL, Bitrate: uint32(input.Bitrate), Type: "FLV", MIMEType: "video/x-flv", Ext: ".flv"}, channel.TrackInfo{Creator: clientIP + " via PecaMI"})
+	ch, err := s.mgr.BroadcastWithAudit(key, channel.ChannelInfo{Name: input.Name, Genre: input.Genre, Desc: input.Description, Comment: input.Comment, URL: input.ContactURL, Bitrate: uint32(input.Bitrate), Type: "FLV", MIMEType: "video/x-flv", Ext: ".flv"}, channel.TrackInfo{Creator: clientIP + " via PecaMI"}, s.auditActor(r, ss), &formGenre, true)
 	if err != nil {
 		http.Error(w, "配信枠を作成できませんでした。", 409)
 		return
 	}
+	tracked = true
 	if err := s.saveHistory(account(ss), broadcastSettings{input.Name, formGenre, input.Description, input.Comment, input.ContactURL}, history); err != nil {
-		s.mgr.Stop(ch.ID)
+		s.mgr.StopInstance(ch, s.auditActor(r, ss), "setup_rollback")
 		http.Error(w, "設定を保存できなかったため、配信枠の作成を取り消しました。", 500)
 		return
 	}
+	ch.AuditRun.Commit()
 	if s.bump != nil {
 		s.bump()
 	}
@@ -176,7 +204,7 @@ func (s *Server) stopBroadcast(w http.ResponseWriter, r *http.Request, ss *sessi
 	defer s.mutate.Unlock()
 	// No caller-supplied account name, stream key or channel ID is accepted.
 	if ch, ok := s.mgr.GetByStreamKey(s.key(ss)); ok {
-		s.mgr.Stop(ch.ID)
+		s.mgr.StopInstance(ch, s.auditActor(r, ss), "user_stop")
 	}
 	if s.bump != nil {
 		s.bump()
