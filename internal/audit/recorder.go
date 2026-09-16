@@ -30,7 +30,7 @@ type Options struct {
 	Node, Dir string
 	QueueSize int
 	MaxBytes  int64
-	Retention time.Duration
+	Retention time.Duration // Zero disables expiry and pruning.
 }
 type Status struct {
 	Enabled          bool       `json:"enabled"`
@@ -73,9 +73,6 @@ func New(opt Options, b Backend) *Recorder {
 	}
 	if opt.MaxBytes <= 0 {
 		opt.MaxBytes = 512 << 20
-	}
-	if opt.Retention <= 0 {
-		opt.Retention = 90 * 24 * time.Hour
 	}
 	r := &Recorder{opt: opt, backend: b, boot: ID(), queue: make(chan Event, opt.QueueSize), stop: make(chan struct{}), done: make(chan struct{}), failures: map[string]*failureCount{}, status: Status{Enabled: true}}
 	go r.loop()
@@ -397,7 +394,7 @@ func (r *Recorder) loop() {
 				recovered = len(events) == 0
 			}
 		}
-		if err == nil && time.Since(lastPrune) > time.Minute {
+		if err == nil && r.opt.Retention > 0 && time.Since(lastPrune) > time.Minute {
 			err = r.backend.Prune(ctx, time.Now().UTC().Add(-r.opt.Retention))
 			if err == nil {
 				lastPrune = time.Now()
@@ -478,7 +475,7 @@ func (r *Recorder) deliver(ctx context.Context) error {
 				bad = true
 				return nil
 			}
-			if e.At.Before(cutoff) {
+			if r.opt.Retention > 0 && e.At.Before(cutoff) {
 				if e.Payload.Broadcast == nil && e.Payload.Input == nil {
 					return nil
 				}

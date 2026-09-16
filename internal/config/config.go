@@ -171,7 +171,7 @@ func Load(path string) (*Config, error) {
 			}
 		}
 		if cfg.Audit.RetentionDays < 0 || cfg.Audit.RetentionDays > 36500 {
-			return nil, fmt.Errorf("config: audit.retention_days must be 0-36500 (0 uses 90)")
+			return nil, fmt.Errorf("config: audit.retention_days must be 0-36500 (0 keeps records indefinitely)")
 		}
 	}
 	return &cfg, nil

@@ -97,4 +97,4 @@ rtmp_url = "rtmp://localhost:1945/live"
 [audit]
 enabled = false
 node_id = "mi-local"
-retention_days = 90
+retention_days = 0 # 無期限。自動削除しない。

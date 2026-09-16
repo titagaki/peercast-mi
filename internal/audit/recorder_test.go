@@ -17,6 +17,7 @@ type memoryBackend struct {
 	events     map[string]Event
 	expired    int
 	recoveries int
+	prunes     int
 }
 
 func (m *memoryBackend) Ready(context.Context) error {
@@ -49,7 +50,12 @@ func (m *memoryBackend) Recover(context.Context, string, string) ([]Event, error
 	m.recoveries++
 	return nil, nil
 }
-func (m *memoryBackend) Prune(context.Context, time.Time) error { return nil }
+func (m *memoryBackend) Prune(context.Context, time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prunes++
+	return nil
+}
 func (m *memoryBackend) count(kind string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -197,9 +203,13 @@ func TestExpiredLifecycleOnlyUsedForReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := &memoryBackend{}
-	r := New(Options{Node: "test", Dir: dir}, db)
+	r := New(Options{Node: "test", Dir: dir, Retention: 90 * 24 * time.Hour}, db)
 	defer closeRecorder(t, r)
-	until(t, func() bool { db.mu.Lock(); defer db.mu.Unlock(); return db.expired == 1 && db.recoveries > 0 })
+	until(t, func() bool {
+		db.mu.Lock()
+		defer db.mu.Unlock()
+		return db.expired == 1 && db.recoveries > 0 && db.prunes > 0
+	})
 	if db.count("auth.login") != 0 {
 		t.Fatal("expired raw event retained")
 	}
@@ -262,5 +272,26 @@ func TestUnconfiguredDatabaseKeepsDurableEvents(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	if len(files) == 0 || r.Status().Dropped != 0 {
 		t.Fatal("unconfigured DB lost events", r.Status())
+	}
+}
+
+func TestUnlimitedRetentionKeepsOldEventsAndNeverPrunes(t *testing.T) {
+	dir := t.TempDir()
+	old := fixtureEvent("auth.login")
+	old.At = time.Now().Add(-365 * 24 * time.Hour)
+	if err := os.WriteFile(filepath.Join(dir, "old.jsonl"), append(mustJSON(old), '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db := &memoryBackend{}
+	r := New(Options{Node: "test", Dir: dir}, db)
+	until(t, func() bool { return r.Status().LastSuccess != nil })
+	closeRecorder(t, r)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if _, ok := db.events[old.ID]; !ok {
+		t.Fatal("old event discarded despite unlimited retention")
+	}
+	if db.expired != 0 || db.prunes != 0 {
+		t.Fatalf("expiry=%d prune=%d", db.expired, db.prunes)
 	}
 }

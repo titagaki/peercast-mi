@@ -10,10 +10,10 @@ enabled = true
 node_id = "mi-production"
 # 省略時はconfig.tomlと同じディレクトリのsite-data/audit
 spool_dir = "/config/site-data/audit"
-retention_days = 90
+retention_days = 0 # 無期限
 ```
 
-`node_id` は再起動後も同じ、1〜64文字のASCII英数字・`.`・`_`・`-`。各稼働ノードで異なる値を使い、同じIDを別ディレクトリの複数プロセスに設定しない。`retention_days` は0で90日、1〜36500で指定日数。無効値は設定読込エラー。
+`node_id` は再起動後も同じ、1〜64文字のASCII英数字・`.`・`_`・`-`。各稼働ノードで異なる値を使い、同じIDを別ディレクトリの複数プロセスに設定しない。`retention_days` は省略または0で無期限（自動削除なし）、1〜36500で指定日数。無効値は設定読込エラー。
 
 接続資格情報は `PEERCAST_AUDIT_DB_HOST`、`PORT`（省略時3306）、`NAME`、`USER`、`PASSWORD`。DB名・ユーザー・ホストが未設定なら記録はスプールに滞留し、設定後の再起動で送信する。接続障害・スキーマ未適用でもログイン・配信は継続する。
 
@@ -83,9 +83,11 @@ OAuthのcode/token、Cookie、CSRF、配信キーやそのハッシュ、RTMP Pu
 
 ## 保持と状態確認
 
-1分ごとに最大1000件の期限切れイベントと最大100件の終了済み枠を削除する。終了済み枠のinputを先に削除する。イベントはoccurred_at、枠はended_at / interruption_detected_atが基準。大量の期限切れデータは複数回で削除する。
+保持期間が0（既定）の場合、DBの期限削除と古い再送イベントの期限判定を行わず、原記録・配信履歴・受信区間を無期限に保存する。
 
-古い再送イベントの原記録は取り込まない。ライフサイクルのスナップショットだけは集約・復旧照合に使い、古い終了済み集約は期限削除する。未終了枠は保持期間だけでは削除しない。.badは自動削除しない。管理者が内容・原因を確認して別保存・除去する。
+保持期間を正の日数に設定した場合は、1分ごとに最大1000件の期限切れイベントと最大100件の終了済み枠を削除する。終了済み枠のinputを先に削除する。イベントはoccurred_at、枠はended_at / interruption_detected_atが基準。大量の期限切れデータは複数回で削除する。
+
+保持期間を正の日数に設定した場合、期限を超えた再送イベントの原記録は取り込まない。ライフサイクルのスナップショットだけは集約・復旧照合に使い、古い終了済み集約は期限削除する。未終了枠は保持期間だけでは削除しない。.badは自動削除しない。管理者が内容・原因を確認して別保存・除去する。
 
 管理者限定 `GET {base_path}/site/api/audit/status` はenabled / degraded / lastSuccess / pendingBytes / pendingFiles / queued / dropped / quarantinedFiles / reasonを返す。droppedは起動中のカウント、quarantinedFilesはディスク上の隔離ファイル数。履歴本文・資格情報は返さない。未認証401、一般ユーザー・開発ログイン403。履歴自体はSQLで参照する。
 

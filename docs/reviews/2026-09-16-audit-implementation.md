@@ -70,3 +70,7 @@ Docker公式MariaDB 11.4イメージ、実行時 `11.4.13-MariaDB-ubu2404`。ima
 同じMariaDB 10.11.16の使い捨てDocker環境で `TestMariaDB` を再実行し成功（0.19秒）。検証したサーバー文字列は `10.11.16-MariaDB-ubu2204`、image digestは `sha256:8a99982dced50264560fd8ada91aa34c276636bc02713f01f252c540930f9915`。4テーブルのmigration・再実行・checksum、保存・重複再送・逆順投入・transaction rollback・復旧・期限削除を確認した。
 
 本番とDBのバージョンは同じだがOSパッケージは異なる。本番へのDDL実行、専用ユーザーの権限、コンテナからの疎通はまだ確認していない。
+
+## 自動削除の無効化
+
+ユーザーの指定で保持期間の既定と本番用設定を無期限（retention_days=0）へ変更。`TestUnlimitedRetentionKeepsOldEventsAndNeverPrunes`で1年前の原イベントが通常保存され、期限削除が一度も呼ばれないことを確認。正の日数を指定した期限処理の既存テストも成功。`go vet ./...`、`go test ./...`成功。SQL・スキーマ変更はなく、今回の変更ではMariaDB実機テストを再実行していない。本番反映はアプリ更新と設定配置が必要。
