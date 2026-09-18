@@ -60,7 +60,7 @@ export default function App({
         )}
       </main>
       <footer>
-        peercast-mi <span>RTMP / PCP node management</span>
+        PecaMI <span>RTMP / PCP node management</span>
       </footer>
     </div>
   );

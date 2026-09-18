@@ -34,9 +34,9 @@ export default function SiteApp() {
       </a>
       <header className="app-header">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
+          <a className="brand-mark" href={siteURL("/")} aria-label="PecaMI トップ">
             mi
-          </span>
+          </a>
           <div>
             <h1>
               <a className="site-brand" href={siteURL("/")}>
@@ -107,7 +107,7 @@ export default function SiteApp() {
         )}
       </main>
       <footer className="site-footer">
-        <span>peercast-mi</span>
+        <span>PecaMI</span>
         <a href={siteURL("/admin")}>管理パネル</a>
       </footer>
     </div>
